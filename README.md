@@ -18,8 +18,12 @@ Your script ──> Claude (storyboard, characters, prompts) ──> Flow Studio
    remember anything between clips.
 3. **Characters.** Edit each look and render a free portrait in Flow to check it.
 4. **Storyboard.** Edit, reorder, retime, add or delete scenes. Render a free **frame** per scene, then the paid
-   **clip**. A clip starts from its scene's frame (or uses the cast as references when there is no frame).
-   Character portraits are attached to every frame so people stay on-model.
+   **clip**. Character portraits are attached to every frame so people stay on-model.
+5. **Seamless scenes.** Claude keeps the story in one location unless the script moves it, and marks each scene
+   that continues from the one before. Between scenes the storyboard shows **🔗 Seamless** or **✂ Cut**; click it
+   to switch. A seamless scene's frame is matched to the previous frame, and its clip **starts on the last frame
+   of the previous clip**, so the cut picks up exactly where the last shot ended. Render clips in order (Render
+   all clips does). A cut starts from its own frame, or from the cast as references when it has none.
 
 Renders are saved in `data/projects/<id>/renders/`. Each project gets its own Flow project called
 "Flow Studio PH · <name>".
@@ -44,9 +48,10 @@ npm run dev
 Open **http://localhost:5173**, then:
 
 1. **Add Claude API key** (top right). It's saved only on this computer, in `data/settings.json`.
-2. **Connect Google Flow** (top right). A separate Chrome window opens; sign in to Google there yourself, once.
-   That Chrome profile lives in `data/chrome-profile` and is separate from your everyday Chrome. Keep the window
-   open (it can sit behind other windows) while renders run.
+2. **Connect Google Flow** (top right). The first time, a Chrome window appears so you can sign in to Google
+   yourself; once you're signed in it hides itself. After that, Flow runs in that hidden window and you never see
+   it. **Show Flow** in the top bar brings it up if you want to watch or fix something by hand. The Chrome profile
+   lives in `data/chrome-profile`, separate from your everyday Chrome.
 3. **+ New project**, paste your script, and click **Generate storyboard**.
 
 ## Credits and safety
@@ -55,6 +60,9 @@ Open **http://localhost:5173**, then:
   default 20), the render is skipped and nothing is spent. Stills are 0 credits; an 8-second 720p clip with
   Omni 1.1 Flash is about 12.
 - Renders run one at a time with a short pause between them.
+- Before anything is generated, the app checks Flow is holding exactly the images it chose (by Flow's asset id),
+  the right way round: the start frame in the Start slot, or the cast as references. If not, it stops before
+  spending anything.
 - Your Google password is never seen or stored by the app; it only uses the Chrome session you signed in to.
 
 ## Settings

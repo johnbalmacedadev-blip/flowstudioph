@@ -4,13 +4,13 @@ import express, { type NextFunction, type Request, type Response } from "express
 import multer from "multer";
 import { DURATIONS, type Character, type Project, type ReferenceKind, type Scene } from "../shared/types.js";
 import { applyBreakdown, breakdownScript } from "./claude.js";
-import { flowStatus, openFlow } from "./flow/browser.js";
+import { connectFlow, flowStatus, setWindowVisible } from "./flow/browser.js";
 import { renderPortrait, renderSceneImage, renderSceneVideo } from "./flow/driver.js";
 import { cancelJob, listJobs, queueFlowJob, startJob } from "./jobs.js";
 import { PROJECTS_DIR, ensureDir, refsDir, safeId } from "./paths.js";
 import { publicSettings, writeSettings } from "./settings.js";
 import {
-  createProject, deleteProject, getProject, listProjects, newId, updateProject,
+  createProject, deleteProject, getProject, listProjects, newId, resetInterruptedRenders, updateProject,
 } from "./store.js";
 
 const PORT = Number(process.env.FSPH_API_PORT ?? 5174);
@@ -121,7 +121,7 @@ app.post("/api/projects/:id/breakdown", (req, res) => {
 
 // ---- characters & scenes ----
 const SCENE_FIELDS: (keyof Scene)[] = [
-  "title", "durationSec", "location", "characterIds", "action", "shot", "imagePrompt", "videoPrompt", "dialogue", "sound",
+  "title", "durationSec", "location", "characterIds", "action", "shot", "imagePrompt", "videoPrompt", "dialogue", "sound", "continuesPrevious",
 ];
 const CHAR_FIELDS: (keyof Character)[] = ["name", "role", "description", "visualPrompt", "referenceIds"];
 
@@ -144,7 +144,7 @@ app.post("/api/projects/:id/scenes", (req, res) => {
         id: newId(), number: 0, title: "New scene",
         durationSec: p.settings.seconds === "auto" ? 8 : p.settings.seconds,
         location: "", characterIds: [], action: "", shot: "", imagePrompt: "", videoPrompt: "",
-        dialogue: "", sound: "", imageStatus: "idle", videoStatus: "idle",
+        dialogue: "", sound: "", continuesPrevious: after >= 0, imageStatus: "idle", videoStatus: "idle",
       };
       p.scenes.splice(after >= 0 ? after + 1 : p.scenes.length, 0, scene);
       p.scenes.forEach((s, i) => (s.number = i + 1));
@@ -260,7 +260,11 @@ app.post("/api/jobs/:jobId/cancel", (req, res) => res.json(cancelJob(req.params.
 
 // ---- Google Flow connection ----
 app.get("/api/flow/status", async (_req, res) => res.json(await flowStatus()));
-app.post("/api/flow/connect", async (_req, res) => res.json(await openFlow()));
+app.post("/api/flow/connect", async (_req, res) => res.json(await connectFlow()));
+app.post("/api/flow/window", async (req, res) => {
+  await setWindowVisible(Boolean(req.body?.visible));
+  res.json(await flowStatus());
+});
 
 // ---- files: references and renders ----
 app.get("/files/:projectId/:folder/:file", (req, res) => {
@@ -281,6 +285,7 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
   res.status(missing ? 404 : 400).json({ error: missing ? "Not found" : err.message });
 });
 
+resetInterruptedRenders();
 app.listen(PORT, "127.0.0.1", () => {
   console.log(`Flow Studio PH API on http://127.0.0.1:${PORT}`);
 });

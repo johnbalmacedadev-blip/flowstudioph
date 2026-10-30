@@ -61,6 +61,7 @@ export const api = {
 
   flowStatus: () => call<FlowStatus>("GET", "/api/flow/status"),
   connectFlow: () => call<FlowStatus>("POST", "/api/flow/connect"),
+  flowWindow: (visible: boolean) => call<FlowStatus>("POST", "/api/flow/window", { visible }),
 };
 
 export const fileUrl = (projectId: string, folder: "refs" | "renders", file: string) =>

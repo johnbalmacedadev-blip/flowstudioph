@@ -66,6 +66,23 @@ export function updateProject(id: string, fn: (p: Project) => void): Project {
   return saveProject(p);
 }
 
+/** Jobs live in memory, so after a restart nothing is really queued or running; say so instead of spinning forever. */
+export function resetInterruptedRenders() {
+  const note = "Interrupted because the app restarted. Render it again.";
+  for (const { id } of listProjects()) {
+    const p = getProject(id);
+    const stuck = (s: string) => s === "queued" || s === "running";
+    if (![...p.scenes.flatMap((s) => [s.imageStatus, s.videoStatus]), ...p.characters.map((c) => c.portraitStatus)].some(stuck)) continue;
+    updateProject(id, (x) => {
+      for (const s of x.scenes) {
+        if (stuck(s.imageStatus)) Object.assign(s, { imageStatus: "idle", error: note });
+        if (stuck(s.videoStatus)) Object.assign(s, { videoStatus: "idle", error: note });
+      }
+      for (const c of x.characters) if (stuck(c.portraitStatus)) Object.assign(c, { portraitStatus: "idle", error: note });
+    });
+  }
+}
+
 export function deleteProject(id: string) {
   fs.rmSync(projectDir(id), { recursive: true, force: true });
 }

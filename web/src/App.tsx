@@ -115,7 +115,8 @@ export default function App() {
           <span>Flow Studio <b>PH</b></span>
         </div>
         <div className="topbar-right">
-          <FlowPill flow={flow} connecting={connecting} onConnect={connect} />
+          <FlowPill flow={flow} connecting={connecting} onConnect={connect}
+            onToggleWindow={() => flow && api.flowWindow(!flow.windowVisible).then(setFlow).catch((e) => setError(e.message))} />
           <button className={`btn ghost ${settings && !settings.hasApiKey ? "attention" : ""}`} onClick={() => setShowSettings(true)}>
             {settings?.hasApiKey ? "Settings" : "Add Claude API key"}
           </button>
@@ -165,15 +166,27 @@ export default function App() {
   );
 }
 
-function FlowPill({ flow, connecting, onConnect }: { flow: FlowStatus | null; connecting: boolean; onConnect: () => void }) {
+function FlowPill({ flow, connecting, onConnect, onToggleWindow }: {
+  flow: FlowStatus | null;
+  connecting: boolean;
+  onConnect: () => void;
+  onToggleWindow: () => void;
+}) {
   const state = !flow?.browserOpen ? "off" : flow.signedIn ? "on" : "wait";
+  const label =
+    state === "on" ? "Google Flow connected" : state === "wait" ? flow?.message ?? "Connecting…" : "Google Flow offline";
   return (
     <div className={`flow-pill ${state}`} title={flow?.message}>
       <span className="dot" />
-      <span>{state === "on" ? "Google Flow connected" : state === "wait" ? "Sign in to Flow…" : "Google Flow offline"}</span>
-      {state !== "on" && (
+      <span className="flow-label">{label}</span>
+      {state === "off" ? (
         <button className="btn small" onClick={onConnect} disabled={connecting}>
-          {connecting ? "Opening…" : state === "off" ? "Connect Google Flow" : "Show window"}
+          {connecting ? "Connecting…" : "Connect Google Flow"}
+        </button>
+      ) : (
+        <button className="btn small ghost" onClick={onToggleWindow}
+          title="Flow runs in a hidden Chrome window. Show it to watch, or to fix something by hand.">
+          {flow?.windowVisible ? "Hide Flow" : "Show Flow"}
         </button>
       )}
     </div>

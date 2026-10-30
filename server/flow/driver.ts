@@ -1,5 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import ffmpegPath from "ffmpeg-static";
 import type { Page } from "playwright-core";
 import type { Character, Project, Scene } from "../../shared/types.js";
 import { ensureDir, refsDir, rendersDir } from "../paths.js";
@@ -8,6 +11,8 @@ import { getProject, updateProject } from "../store.js";
 import { getFlowPage } from "./browser.js";
 
 type Report = (progress: string) => void;
+
+const execFileAsync = promisify(execFile);
 
 const FLOW_HOME = "https://flow.google.com/?hl=en";
 const IMAGE_TIMEOUT_MS = 4 * 60_000;
@@ -48,35 +53,75 @@ export async function renderPortrait(p: Project, characterId: string, report: Re
   });
 }
 
+const CONTINUE_FRAME =
+  "Continue the exact same scene as the first reference image: same location, set, props, lighting, time of day and wardrobe, as the next moment of the same shot.";
+
 export async function renderSceneImage(p: Project, sceneId: string, report: Report) {
   const s = scene(p, sceneId);
+  const prevFrame = s.continuesPrevious ? renderFile(p, previous(p, s)?.imageFile) : undefined;
+  if (s.continuesPrevious && !prevFrame) report("No frame for the previous scene yet; matching the cast only.");
+  const refs = characterRefs(p, cast(p, s), true);
   return generate(p, report, `scene-${pad(s.number)}-frame`, {
     kind: "image",
-    prompt: s.imagePrompt || s.action,
+    prompt: prevFrame ? `${CONTINUE_FRAME} ${s.imagePrompt || s.action}` : s.imagePrompt || s.action,
     aspect: p.settings.aspectRatio,
-    attachments: characterRefs(p, cast(p, s), true),
+    attachments: (prevFrame ? [upload(prevFrame), ...refs] : refs).slice(0, MAX_ATTACHMENTS),
   });
 }
 
+/**
+ * Where a clip starts: a continuing scene picks up on the last frame of the previous clip (a seamless cut);
+ * otherwise the scene's own frame; otherwise Flow works from the cast as references.
+ */
 export async function renderSceneVideo(p: Project, sceneId: string, report: Report) {
   const s = scene(p, sceneId);
-  const frame = s.imageFile && path.join(rendersDir(p.id), s.imageFile);
-  const useFrame = Boolean(frame && fs.existsSync(frame));
+  let start: string | undefined;
+  if (s.continuesPrevious) {
+    const prevClip = renderFile(p, previous(p, s)?.videoFile);
+    if (prevClip) {
+      report("Taking the last frame of the previous clip…");
+      start = await lastFrame(prevClip);
+    } else {
+      report("The previous scene has no clip yet, so this one can't pick up from it; using its own frame.");
+    }
+  }
+  start ??= renderFile(p, s.imageFile);
   return generate(p, report, `scene-${pad(s.number)}-clip`, {
     kind: "video",
     prompt: s.videoPrompt || s.action,
     aspect: p.settings.aspectRatio,
     durationSec: s.durationSec,
-    videoMode: useFrame ? "frames" : "ingredients",
-    attachments: useFrame
-      ? [{ name: `fsph-${s.id}-frame${path.extname(frame!)}`, file: frame! }]
-      : characterRefs(p, cast(p, s), true),
+    videoMode: start ? "frames" : "ingredients",
+    attachments: start ? [upload(start)] : characterRefs(p, cast(p, s), true),
   });
 }
 
 // ---------------------------------------------------------------- helpers
 
 const pad = (n: number) => String(n).padStart(2, "0");
+
+/** Render file names are unique (timestamped), so the upload name is too: a re-render never reuses a stale upload. */
+const upload = (file: string): Attachment => ({ name: `fsph-${path.basename(file)}`, file });
+
+function renderFile(p: Project, file?: string) {
+  const full = file && path.join(rendersDir(p.id), file);
+  return full && fs.existsSync(full) ? full : undefined;
+}
+
+function previous(p: Project, s: Scene) {
+  const i = p.scenes.findIndex((x) => x.id === s.id);
+  return i > 0 ? p.scenes[i - 1] : undefined;
+}
+
+/** The clip's final frame as a JPEG next to it (made once, with the FFmpeg bundled with the app). */
+async function lastFrame(clip: string) {
+  const out = clip.replace(/\.[^.]+$/, "-last.jpg");
+  if (fs.existsSync(out)) return out;
+  // -sseof seeks to just before the end; -update keeps overwriting one image, leaving the last frame.
+  await execFileAsync(ffmpegPath as unknown as string, ["-v", "error", "-y", "-sseof", "-0.5", "-i", clip, "-update", "1", "-q:v", "2", out]);
+  if (!fs.existsSync(out)) throw new Error("Couldn't read the last frame of the previous clip.");
+  return out;
+}
 
 function scene(p: Project, id: string) {
   const s = p.scenes.find((x) => x.id === id);
@@ -94,7 +139,7 @@ function characterRefs(p: Project, chars: Character[], preferPortrait: boolean):
   for (const c of chars) {
     const portrait = c.portraitFile && path.join(rendersDir(p.id), c.portraitFile);
     if (preferPortrait && portrait && fs.existsSync(portrait)) {
-      out.push({ name: `fsph-${c.id}-portrait${path.extname(portrait)}`, file: portrait });
+      out.push(upload(portrait));
       continue;
     }
     for (const r of p.references.filter((x) => c.referenceIds.includes(x.id))) {
@@ -108,18 +153,26 @@ function characterRefs(p: Project, chars: Character[], preferPortrait: boolean):
 
 async function generate(p: Project, report: Report, baseName: string, req: Request) {
   const page = await getFlowPage();
-  await page.bringToFront();
   report("Opening the Flow project…");
   await openProject(page, p);
   await resetComposer(page);
 
+  // Flow remembers attachments separately for each mode and brings them back when you switch, so switch to
+  // the final mode first, clear what it remembered, then attach. A clip's start frame goes straight into
+  // the Start slot; everything else is a reference added with +.
+  const fromFrame = req.kind === "video" && req.videoMode === "frames";
+  await configure(page, req);
+  await clearAttachments(page);
+
+  const expected: string[] = [];
   for (const [i, a] of req.attachments.entries()) {
-    report(`Attaching reference ${i + 1} of ${req.attachments.length}…`);
-    await attach(page, a);
+    report(fromFrame ? "Setting the start frame…" : `Attaching reference ${i + 1} of ${req.attachments.length}…`);
+    expected.push(await attach(page, a, fromFrame ? "start" : "reference"));
   }
 
   report("Setting up the generation…");
   const credits = await configure(page, req);
+  await checkAttachments(page, req, expected);
   const cap = readSettings().maxCreditsPerClip;
   if (credits > cap) {
     await resetComposer(page);
@@ -127,6 +180,10 @@ async function generate(p: Project, report: Report, baseName: string, req: Reque
   }
 
   await typePrompt(page, req.prompt);
+  if (process.env.FSPH_DRY_RUN) {
+    report(`Dry run: ${credits} credits, ${(await composerSummary(page)).text}`);
+    throw new Error("Dry run: stopped before generating.");
+  }
   const before = await mediaSources(page);
   await page.locator('[aria-label="Start generation"]').last().click();
   report(credits ? `Generating in Flow (${credits} credits)…` : "Generating in Flow (free)…");
@@ -137,6 +194,53 @@ async function generate(p: Project, report: Report, baseName: string, req: Reque
   const file = `${baseName}-${Date.now().toString(36)}${ext}`;
   fs.writeFileSync(path.join(ensureDir(rendersDir(p.id)), file), bytes);
   return file;
+}
+
+/** Flow's id for an image: the path in its media URL (flow-content.google/image/<id> or /asb/<id>). */
+function assetId(src: string) {
+  return /\/(?:image|asb)\/([\w-]+)/.exec(src)?.[1] ?? "";
+}
+
+/** The composer box: the part of the page around the prompt field and its settings chip. */
+const composerBox = (page: Page) =>
+  composer(page).locator("xpath=ancestor::*[.//*[@aria-label='Settings trigger']][1]");
+
+/** What's attached above the prompt: the asset ids in order (a start frame comes first) and the mode chip. */
+async function composerSummary(page: Page) {
+  const ids = await composerBox(page)
+    .locator("img")
+    .evaluateAll((imgs) =>
+      imgs.filter((i) => i.getBoundingClientRect().width > 20).map((i) => (i as HTMLImageElement).currentSrc || (i as HTMLImageElement).src),
+    )
+    .then((srcs) => srcs.map(assetId));
+  const startEmpty = await page.getByRole("button", { name: "Start", exact: true }).isVisible().catch(() => false);
+  const framesMode = await page.locator('[aria-label="Swap first and last frames"]').last().isVisible().catch(() => false);
+  const startFilled = framesMode && !startEmpty;
+  const mode = (await page.locator('[aria-label="Settings trigger"]').last().innerText().catch(() => "")).replace(/\s+/g, " ");
+  return { ids, startFilled, mode, text: `${mode}; start frame: ${startFilled ? "yes" : "no"}; attached: ${ids.length}` };
+}
+
+/** Make sure Flow holds exactly the images this request chose, the right way round, before any credits are spent. */
+async function checkAttachments(page: Page, req: Request, expected: string[]) {
+  const s = await composerSummary(page);
+  const known = expected.every(Boolean);
+  const same = s.ids.length === expected.length && (!known || expected.every((id) => s.ids.includes(id)));
+  if (req.kind === "video" && req.videoMode === "frames") {
+    if (!s.startFilled || !same || (known && s.ids[0] !== expected[0])) {
+      throw new Error("Flow didn't take the right image as the clip's start frame, so nothing was generated. Try again.");
+    }
+  } else if (!same || (req.kind === "video" && s.startFilled)) {
+    throw new Error("Flow didn't hold exactly the references this shot needs, so nothing was generated. Try again.");
+  }
+}
+
+/** Remove every start/end frame and reference Flow is still holding in the current mode. */
+async function clearAttachments(page: Page) {
+  const remove = composerBox(page).locator('[aria-label="Image ingredient"], [aria-label="Ingredient"]');
+  for (let i = 0; i < 10 && (await remove.count()) > 0; i++) {
+    await remove.first().click().catch(() => {});
+    await page.waitForTimeout(400);
+  }
 }
 
 /** Each app project gets its own Flow project, created on first use and remembered. */
@@ -170,17 +274,21 @@ async function resetComposer(page: Page) {
   await page.waitForTimeout(500);
 }
 
-async function openPicker(page: Page) {
+/** Open the asset picker: from the Start slot for a start frame, or from + for a reference. */
+async function openPicker(page: Page, slot: "start" | "reference") {
   const upload = page.getByRole("button", { name: "Upload media" });
-  if (!(await upload.isVisible().catch(() => false))) {
-    await page.locator('[aria-label="Add ingredients to the prompt box"]').last().click();
-    await upload.waitFor({ timeout: 15_000 });
-  }
+  if (await upload.isVisible().catch(() => false)) await page.keyboard.press("Escape");
+  if (slot === "start") await page.getByRole("button", { name: "Start", exact: true }).click({ timeout: 15_000 });
+  else await page.locator('[aria-label="Add ingredients to the prompt box"]').last().click({ timeout: 15_000 });
+  await upload.waitFor({ timeout: 15_000 });
 }
 
-/** Find the asset by its unique name in the picker, uploading it the first time. Clicking it attaches it. */
-async function attach(page: Page, a: Attachment) {
-  await openPicker(page);
+/**
+ * Find the asset by its unique name in the picker, uploading it the first time, and pick it.
+ * Returns Flow's id for it, so checkAttachments() can confirm Flow is holding this exact image.
+ */
+async function attach(page: Page, a: Attachment, slot: "start" | "reference") {
+  await openPicker(page, slot);
   const search = page.getByPlaceholder("Search assets");
   const option = () => page.getByRole("option").filter({ hasText: a.name }).first();
   await search.fill(a.name);
@@ -196,9 +304,18 @@ async function attach(page: Page, a: Attachment) {
     await option().waitFor({ timeout: 60_000 });
     await waitUntil(async () => !(await option().innerText()).includes("Uploading"), 120_000, "Upload took too long.");
   }
+  await waitUntil(async () => Boolean(assetId((await option().locator("img").first().getAttribute("src")) ?? "")), 30_000, "Upload took too long.");
+  const id = assetId((await option().locator("img").first().getAttribute("src")) ?? "");
   await option().click();
   await page.waitForTimeout(800);
-  await page.keyboard.press("Escape");
+  // The reference picker attaches on click; the frame picker selects and waits for "Add to prompt".
+  const add = page.getByText("Add to prompt", { exact: true });
+  if (await page.getByRole("button", { name: "Upload media" }).isVisible().catch(() => false)) {
+    if (await add.isVisible().catch(() => false)) await add.click();
+    await page.waitForTimeout(800);
+  }
+  if (await page.getByRole("button", { name: "Upload media" }).isVisible().catch(() => false)) await page.keyboard.press("Escape");
+  return id;
 }
 
 function mimeOf(file: string) {
@@ -207,7 +324,10 @@ function mimeOf(file: string) {
 }
 
 /** Set type, mode, aspect, length, resolution and count; returns Flow's own credit quote. */
-async function configure(page: Page, req: Request): Promise<number> {
+async function configure(
+  page: Page,
+  req: Pick<Request, "kind"> & Partial<Pick<Request, "aspect" | "durationSec" | "videoMode">>,
+): Promise<number> {
   await page.locator('[aria-label="Settings trigger"]').last().click();
   const pop = page.locator(".cdk-overlay-container");
   // A button's text is its icon name followed by its label with no space ("imageImage"), so match the end.
@@ -225,7 +345,7 @@ async function configure(page: Page, req: Request): Promise<number> {
     await pick("720p");
     if (req.durationSec) await pick(`${req.durationSec}s`);
   }
-  await pick(req.aspect);
+  if (req.aspect) await pick(req.aspect);
   await pick("x1");
 
   const quote = await pop.getByText(/Generating will use/).innerText().catch(() => "");

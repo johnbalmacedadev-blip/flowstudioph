@@ -49,7 +49,7 @@ code { font-size: 12px; background: var(--panel-2); padding: 1px 5px; border-rad
   border: 1px solid var(--line); background: var(--panel-2); font-size: 13px;
 }
 .flow-pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
-.flow-pill.on { padding-right: 12px; }
+.flow-label { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .flow-pill.on .dot { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
 .flow-pill.wait .dot { background: var(--warn); animation: blink 1.2s infinite; }
 @keyframes blink { 50% { opacity: 0.3; } }
@@ -196,7 +196,14 @@ input.title-input { font: 600 15px var(--display); background: transparent; bord
 input.title-input:hover { border-color: var(--line); }
 
 /* ---- scenes ---- */
-.scenes { display: grid; gap: 14px; }
+.scenes { display: grid; gap: 6px; }
+.link-toggle {
+  justify-self: start; margin-left: 140px; padding: 3px 12px; border-radius: 999px; cursor: pointer;
+  border: 1px dashed var(--line); background: transparent; color: var(--muted); font-size: 12px; font-weight: 600;
+}
+.link-toggle.on { border: 1px solid rgba(62, 207, 142, 0.45); background: rgba(62, 207, 142, 0.1); color: var(--ok); }
+.link-toggle:hover { border-color: var(--accent); color: var(--text); }
+@media (max-width: 760px) { .link-toggle { margin-left: 0; } }
 .scene { grid-template-columns: 300px 1fr; align-items: start; gap: 16px; }
 .scene.vertical { grid-template-columns: 170px 1fr; }
 .scene-media { position: relative; border-radius: 10px; overflow: hidden; background: #000; }

@@ -40,11 +40,26 @@ async function run(job: Job, runner: Runner) {
     if (job.kind !== "breakdown") job.progress = "Done";
   } catch (e) {
     job.status = "failed";
-    job.error = (e as Error).message;
+    job.error = friendlyError(e as Error);
     job.progress = "Failed";
   } finally {
     job.finishedAt = new Date().toISOString();
   }
+}
+
+/**
+ * Browser-automation errors carry colour codes and a call log; keep one readable sentence.
+ * Our own errors are already written for people and pass through unchanged.
+ */
+export function friendlyError(e: Error): string {
+  const first = e.message.replace(/\u001b\[[0-9;]*m/g, "").split("\n")[0].trim();
+  if (e.name === "TimeoutError" || /Timeout \d+ms exceeded/.test(first)) {
+    return "Google Flow's page didn't respond as expected. Make sure the Flow window is still open and signed in, then try again.";
+  }
+  if (/Target (page|closed)|browser has been closed|ECONNREFUSED/i.test(first)) {
+    return "The Google Flow window was closed. Click Connect Google Flow, then try again.";
+  }
+  return first.replace(/^(locator|page|browserType)\.\w+: /, "");
 }
 
 /** Claude calls run right away and in parallel. */

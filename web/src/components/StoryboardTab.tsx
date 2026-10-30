@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { DURATIONS, type Duration, type FlowStatus, type Project, type Scene } from "../../../shared/types";
 import { api, fileUrl } from "../api";
 import { Editable } from "./Editable";
@@ -63,8 +63,22 @@ export function StoryboardTab({ project, flow, onChange, onError }: Props) {
 
       <div className="scenes">
         {project.scenes.map((s, i) => (
+          <Fragment key={s.id}>
+          {i > 0 && (
+            <button
+              className={`link-toggle ${s.continuesPrevious ? "on" : ""}`}
+              onClick={() => run(api.updateScene(id, s.id, { continuesPrevious: !s.continuesPrevious }))}
+              title={
+                s.continuesPrevious
+                  ? "Seamless: this clip starts on the last frame of the previous clip, in the same place. Click to make it a cut."
+                  : "Cut: this scene is a new shot. Click to make it continue seamlessly from the previous scene."
+              }
+            >
+              {s.continuesPrevious ? `🔗 Seamless from scene ${i}` : "✂ Cut"}
+            </button>
+          )}
           <SceneCard
-            key={s.id}
+
             project={project}
             scene={s}
             first={i === 0}
@@ -77,6 +91,7 @@ export function StoryboardTab({ project, flow, onChange, onError }: Props) {
             onDelete={() => confirm(`Delete scene ${s.number}?`) && run(api.deleteScene(id, s.id))}
             onRender={(kind) => render(kind, [s.id])}
           />
+          </Fragment>
         ))}
       </div>
     </div>

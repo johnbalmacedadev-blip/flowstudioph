@@ -8,7 +8,14 @@ import { CHROME_PROFILE_DIR, ensureDir } from "../paths.js";
 export const FLOW_URL = "https://flow.google.com/?hl=en";
 const CDP_PORT = Number(process.env.FSPH_CDP_PORT ?? 9335);
 
+// Off-screen, well past any real monitor. Chrome keeps rendering it because of the flags below.
+const HIDDEN = { left: -12000, top: -12000, width: 1600, height: 1000 };
+const SHOWN = { left: 80, top: 60, width: 1400, height: 900 };
+
 let browser: Browser | null = null;
+let windowVisible = false;
+/** True while the window is up only so you can sign in; it hides itself once you're signed in. */
+let shownForSignIn = false;
 
 function findChrome(): string {
   const candidates = [
@@ -34,8 +41,9 @@ async function cdpAlive() {
 }
 
 /**
- * Chrome is started as a normal window (own profile, debugging port) and we attach to it.
- * Google refuses sign-in inside browsers launched by automation tools; a normal Chrome is fine.
+ * Chrome is started as a normal browser (own profile, debugging port) and we attach to it:
+ * Google refuses sign-in inside browsers launched by automation tools. Its window starts off-screen,
+ * and background throttling is switched off so Flow keeps working while you can't see it.
  */
 export async function getBrowser(): Promise<Browser> {
   if (browser?.isConnected()) return browser;
@@ -48,17 +56,27 @@ export async function getBrowser(): Promise<Browser> {
         `--remote-debugging-port=${CDP_PORT}`,
         "--no-first-run",
         "--no-default-browser-check",
-        "--start-maximized",
+        `--window-position=${HIDDEN.left},${HIDDEN.top}`,
+        `--window-size=${HIDDEN.width},${HIDDEN.height}`,
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+        "--disable-background-timer-throttling",
+        "--disable-features=CalculateNativeWinOcclusion",
         FLOW_URL,
       ],
       { detached: true, stdio: "ignore" },
     );
     child.unref();
+    windowVisible = false;
     for (let i = 0; i < 40 && !(await cdpAlive()); i++) await new Promise((r) => setTimeout(r, 250));
     if (!(await cdpAlive())) throw new Error("Chrome started but did not open its debugging port.");
   }
   browser = await chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
-  browser.on("disconnected", () => (browser = null));
+  browser.on("disconnected", () => {
+    browser = null;
+    windowVisible = false;
+    shownForSignIn = false;
+  });
   return browser;
 }
 
@@ -69,44 +87,78 @@ export async function getFlowPage(): Promise<Page> {
   const b = await getBrowser();
   const ctx = b.contexts()[0];
   const pages = ctx.pages();
-  const page = pages.find((p) => isFlowUrl(p.url())) ?? pages[0] ?? (await ctx.newPage());
-  if (!isFlowUrl(page.url())) await page.goto(FLOW_URL, { waitUntil: "domcontentloaded" });
+  const page =
+    pages.find((p) => isFlowUrl(p.url()) || p.url().includes("accounts.google")) ?? pages[0] ?? (await ctx.newPage());
+  if (!isFlowUrl(page.url()) && !page.url().includes("accounts.google")) {
+    await page.goto(FLOW_URL, { waitUntil: "domcontentloaded" });
+  }
   return page;
 }
 
-export async function flowStatus(): Promise<FlowStatus> {
-  if (!(await cdpAlive())) {
-    return { browserOpen: false, signedIn: false, url: "", message: "Chrome isn't open. Click Connect Google Flow." };
-  }
-  try {
-    const b = await getBrowser();
-    const page = b.contexts()[0]?.pages().find((p) => isFlowUrl(p.url()) || p.url().includes("accounts.google"));
-    if (!page) return { browserOpen: true, signedIn: false, url: "", message: "Open Flow in the Flow Studio PH Chrome window." };
-    const url = page.url();
-    if (url.includes("accounts.google")) {
-      return { browserOpen: true, signedIn: false, url, message: "Finish signing in to Google in the Chrome window." };
-    }
-    const signedIn = await isSignedIn(page);
-    return {
-      browserOpen: true,
-      signedIn,
-      url,
-      message: signedIn ? "Connected to Google Flow." : "Sign in to Google in the Chrome window.",
-    };
-  } catch (e) {
-    return { browserOpen: true, signedIn: false, url: "", message: (e as Error).message };
-  }
-}
-
-/** Signed out, Flow sends you to its public /about page, which has a "Sign in" link to Google accounts. */
-async function isSignedIn(page: Page) {
-  if (new URL(page.url()).pathname.startsWith("/about")) return false;
-  const signIn = page.locator('a[href*="accounts.google.com/ServiceLogin"]');
-  return !(await signIn.first().isVisible().catch(() => false));
-}
-
-export async function openFlow() {
+/** Move the Flow window on or off screen without closing it. */
+export async function setWindowVisible(visible: boolean) {
   const page = await getFlowPage();
-  await page.bringToFront();
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    const { windowId } = (await cdp.send("Browser.getWindowForTarget")) as { windowId: number };
+    await cdp.send("Browser.setWindowBounds", { windowId, bounds: { windowState: "normal" } });
+    await cdp.send("Browser.setWindowBounds", { windowId, bounds: visible ? SHOWN : HIDDEN });
+  } finally {
+    await cdp.detach().catch(() => {});
+  }
+  if (visible) await page.bringToFront();
+  windowVisible = visible;
+  if (!visible) shownForSignIn = false;
+}
+
+type SignIn = "signed-in" | "signed-out" | "loading";
+
+/** Signed in, Flow shows your Google Account button; signed out, its public /about page or Google's sign-in. */
+async function signInState(page: Page): Promise<SignIn> {
+  const url = page.url();
+  if (url.includes("accounts.google") || new URL(url).pathname.startsWith("/about")) return "signed-out";
+  if (await page.locator('[aria-label^="Google Account:"]').first().isVisible().catch(() => false)) return "signed-in";
+  if (await page.locator('a[href*="accounts.google.com/ServiceLogin"]').first().isVisible().catch(() => false)) {
+    return "signed-out";
+  }
+  return "loading";
+}
+
+export async function flowStatus(): Promise<FlowStatus> {
+  const off = { browserOpen: false, signedIn: false, windowVisible: false, url: "" };
+  if (!(await cdpAlive())) return { ...off, message: "Google Flow isn't connected. Click Connect Google Flow." };
+  try {
+    const page = await getFlowPage();
+    const state = await signInState(page);
+    if (state === "signed-in" && shownForSignIn) await setWindowVisible(false);
+    const message =
+      state === "signed-in"
+        ? "Connected to Google Flow."
+        : state === "loading"
+          ? "Loading Google Flow…"
+          : "Sign in to Google in the Flow window that just opened.";
+    return { browserOpen: true, signedIn: state === "signed-in", windowVisible, url: page.url(), message };
+  } catch (e) {
+    return { ...off, browserOpen: true, message: (e as Error).message };
+  }
+}
+
+/** Start or reconnect to Flow. The window stays hidden unless you need to sign in. */
+export async function connectFlow(): Promise<FlowStatus> {
+  const page = await getFlowPage();
+  await page.waitForLoadState("domcontentloaded").catch(() => {});
+  let state: SignIn = "loading";
+  for (let i = 0; i < 20 && state === "loading"; i++) {
+    state = await signInState(page);
+    if (state === "loading") await page.waitForTimeout(500);
+  }
+  if (state === "signed-out") {
+    await setWindowVisible(true);
+    shownForSignIn = true;
+  } else if (windowVisible && !shownForSignIn) {
+    // Leave it where it is if you opened it yourself.
+  } else {
+    await setWindowVisible(false);
+  }
   return flowStatus();
 }

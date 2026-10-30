@@ -46,6 +46,11 @@ export interface Scene {
   videoPrompt: string;
   dialogue: string;
   sound: string;
+  /**
+   * Same place and moment as the scene before: its frame is matched to the previous frame, and its clip
+   * starts on the previous clip's last frame, so the cut is seamless.
+   */
+  continuesPrevious: boolean;
   imageStatus: RenderStatus;
   imageFile?: string;
   videoStatus: RenderStatus;
@@ -110,6 +115,8 @@ export interface Job {
 export interface FlowStatus {
   browserOpen: boolean;
   signedIn: boolean;
+  /** Whether the Flow Chrome window is on screen (it normally runs hidden). */
+  windowVisible: boolean;
   url: string;
   message: string;
 }

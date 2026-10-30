@@ -31,6 +31,7 @@ interface Breakdown {
     video_prompt: string;
     dialogue: string;
     sound: string;
+    continues_previous: boolean;
   }[];
 }
 
@@ -67,7 +68,7 @@ function breakdownSchema(allowed: readonly number[]) {
           additionalProperties: false,
           required: [
             "title", "duration_seconds", "location", "characters", "action",
-            "shot", "image_prompt", "video_prompt", "dialogue", "sound",
+            "shot", "image_prompt", "video_prompt", "dialogue", "sound", "continues_previous",
           ],
           properties: {
             title: str,
@@ -80,6 +81,7 @@ function breakdownSchema(allowed: readonly number[]) {
             video_prompt: str,
             dialogue: str,
             sound: str,
+            continues_previous: { type: "boolean" },
           },
         },
       },
@@ -100,7 +102,12 @@ Rules:
 - style_guide is one paragraph describing the shared visual style. Fold it into every prompt.
 - For reference images, use reference_labels to link a character to the labels of the images that show them, and match their visual_prompt to what the image shows.
 - characters lists only recurring or named people, creatures or mascots. Use the exact same name in each scene's characters list.
-- dialogue and sound may be empty strings when there is none.`;
+- dialogue and sound may be empty strings when there is none.
+
+Continuity (the scenes are cut together into one film, so they must feel continuous):
+- Stay in the same location from scene to scene unless the source clearly moves the story somewhere else. Do not invent a new location to make a shot more interesting; find a new angle or action in the same place instead.
+- Give each location one fixed name and one fixed visual description (set, props, time of day, light, weather), and repeat that description word for word in every prompt set there. Keep wardrobe, props in hand and positions consistent from shot to shot.
+- Set continues_previous to true when a scene happens in the same place and moment as the scene before it (same location, no time jump). The clip will then start on the previous clip's last frame, so write its image_prompt and video_prompt to pick up exactly where the previous shot ends: the same people where they were, then the new action. Set it to false for the first scene, after a change of location, or after a time jump.`;
 
 export interface BreakdownProgress {
   (message: string): void;
@@ -221,6 +228,7 @@ export function applyBreakdown(project: Project, b: Breakdown) {
     videoPrompt: s.video_prompt,
     dialogue: s.dialogue,
     sound: s.sound,
+    continuesPrevious: i > 0 && s.continues_previous,
     imageStatus: "idle",
     videoStatus: "idle",
   }));
