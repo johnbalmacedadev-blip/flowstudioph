@@ -1,6 +1,8 @@
 import type { FlowStatus, Project } from "../../../shared/types";
 import { api, fileUrl } from "../api";
 import { Editable } from "./Editable";
+import { ProductsSection } from "./ProductsSection";
+import { isBusy, RenderLabel } from "./Busy";
 import { StatusBadge } from "./StatusBadge";
 
 interface Props {
@@ -21,6 +23,8 @@ export function CharactersTab({ project, flow, onChange, onError }: Props) {
 
   return (
     <div className="tab-body">
+      <ProductsSection project={project} flow={flow} onChange={onChange} onError={onError} />
+      <h3 className="section-title">Cast</h3>
       <div className="toolbar">
         <p className="muted">
           Each character's visual description is repeated in every scene prompt so they look the same in every shot.
@@ -28,7 +32,9 @@ export function CharactersTab({ project, flow, onChange, onError }: Props) {
         </p>
         <div className="row tight">
           <button className="btn ghost" onClick={() => run(api.addCharacter(id))}>+ Add character</button>
-          <button className="btn primary" disabled={!project.characters.length} onClick={() => render()}>Render all portraits</button>
+          <button className="btn primary" disabled={!project.characters.length || project.characters.some((c) => isBusy(c.portraitStatus))} onClick={() => render()}>
+            <RenderLabel status={project.characters.some((c) => isBusy(c.portraitStatus)) ? "running" : "idle"} idle="Render all portraits" running="Rendering portraits…" />
+          </button>
         </div>
       </div>
 
@@ -73,7 +79,9 @@ export function CharactersTab({ project, flow, onChange, onError }: Props) {
                 )}
                 {c.error && <div className="error-text small">{c.error}</div>}
                 <div className="row tight">
-                  <button className="btn small" onClick={() => render([c.id])}>Render portrait</button>
+                  <button className="btn small" onClick={() => render([c.id])} disabled={isBusy(c.portraitStatus)}>
+                    <RenderLabel status={c.portraitStatus} idle={c.portraitFile ? "Re-render portrait" : "Render portrait"} running="Rendering portrait…" />
+                  </button>
                   <span className="grow" />
                   <button className="btn small ghost danger" onClick={() => confirm(`Remove ${c.name}?`) && run(api.deleteCharacter(id, c.id))}>
                     Remove

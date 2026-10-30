@@ -1,5 +1,5 @@
 import type {
-  AppSettings, Character, ExportResolution, FinalCut, FlowStatus, Job, Project, ProjectSettings, ProjectSummary,
+  AppSettings, Character, ExportResolution, FinalCut, FlowStatus, Job, Product, Project, ProjectSettings, ProjectSummary,
   ReferenceKind, Scene,
 } from "../../shared/types";
 
@@ -30,11 +30,12 @@ export const api = {
     call<Project>("PUT", P(id), patch),
   deleteProject: (id: string) => call<{ ok: true }>("DELETE", P(id)),
 
-  uploadRefs: (id: string, files: File[], kind: ReferenceKind, label?: string) => {
+  uploadRefs: (id: string, files: File[], kind: ReferenceKind, label?: string, productId?: string) => {
     const fd = new FormData();
     files.forEach((f) => fd.append("files", f));
     fd.append("kind", kind);
     if (label) fd.append("label", label);
+    if (productId) fd.append("productId", productId);
     return call<Project>("POST", `${P(id)}/references`, fd);
   },
   updateRef: (id: string, refId: string, patch: { label?: string; kind?: ReferenceKind }) =>
@@ -55,7 +56,12 @@ export const api = {
   addCharacter: (id: string) => call<Project>("POST", `${P(id)}/characters`, {}),
   deleteCharacter: (id: string, charId: string) => call<Project>("DELETE", `${P(id)}/characters/${charId}`),
 
-  render: (id: string, kind: "portrait" | "image" | "video", ids?: string[]) =>
+  addProduct: (id: string) => call<Project>("POST", `${P(id)}/products`, {}),
+  updateProduct: (id: string, productId: string, patch: Partial<Product>) =>
+    call<Project>("PUT", `${P(id)}/products/${productId}`, patch),
+  deleteProduct: (id: string, productId: string) => call<Project>("DELETE", `${P(id)}/products/${productId}`),
+
+  render: (id: string, kind: "portrait" | "product" | "image" | "video", ids?: string[]) =>
     call<Job[]>("POST", `${P(id)}/render`, { kind, ids }),
 
   finalCut: (id: string) => call<FinalCut>("GET", `${P(id)}/final-cut`),

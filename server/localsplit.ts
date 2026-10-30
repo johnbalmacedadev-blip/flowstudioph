@@ -11,7 +11,10 @@ const WORDS_PER_SECOND = 3;
  */
 export function quickSplit(p: Project): Breakdown {
   const seconds = p.settings.seconds === "auto" ? 8 : p.settings.seconds;
-  const style = p.settings.style.trim();
+  const ugc = p.settings.videoStyle === "ugc";
+  const style = [p.settings.style.trim(), ugc ? "authentic UGC smartphone video, handheld, natural light, creator talking to camera" : ""]
+    .filter(Boolean)
+    .join(", ");
   const blocks = splitBlocks(p.script);
   if (!blocks.length) throw new Error("Paste a script or master prompt first.");
 
@@ -22,9 +25,17 @@ export function quickSplit(p: Project): Breakdown {
     if (!/^(INT|EXT|SCENE|SHOT|CUT|FADE|NOTE|STYLE|TITLE)\b/i.test(m[1])) speakers.add(titleCase(m[1].trim()));
   }
   for (const r of p.references) if (r.kind === "character" && mentions(p.script, r.label)) speakers.add(r.label);
-  const places = new Set(blocks.flatMap((b) => headingLocation(b.heading)?.toLowerCase().split(/\s+/) ?? []));
+  // Words that belong to places or products are never people ("Glow C" is a serum, not a character).
+  const notPeople = new Set(
+    [
+      ...blocks.flatMap((b) => headingLocation(b.heading) ?? []),
+      ...(p.products ?? []).map((x) => x.name),
+      ...p.references.filter((r) => r.kind !== "character").map((r) => r.label),
+    ].flatMap((s) => s.toLowerCase().split(/\s+/)),
+  );
   for (const name of recurringNames(blocks.map((b) => b.text).join("\n"))) {
-    if (![...speakers].some((s) => s.toLowerCase().includes(name.toLowerCase())) && !places.has(name.toLowerCase())) speakers.add(name);
+    const words = name.toLowerCase().split(/\s+/);
+    if (![...speakers].some((s) => s.toLowerCase().includes(name.toLowerCase())) && !words.some((w) => notPeople.has(w))) speakers.add(name);
   }
   const characters = [...speakers].map((name) => ({
     name,
@@ -34,6 +45,14 @@ export function quickSplit(p: Project): Breakdown {
     reference_labels: p.references.filter((r) => r.label.toLowerCase() === name.toLowerCase()).map((r) => r.label),
   }));
   const locationRefs = p.references.filter((r) => r.kind === "location");
+  // Products: the project's own, plus product photos not linked to one yet (named after their label).
+  const linked = new Set((p.products ?? []).flatMap((x) => x.referenceIds));
+  const products = [
+    ...(p.products ?? []).map((x) => ({ name: x.name, description: x.description, visual_prompt: x.visualPrompt || x.description, reference_labels: [], locked: x.locked })),
+    ...p.references
+      .filter((r) => r.kind === "product" && !linked.has(r.id))
+      .map((r) => ({ name: r.label, description: "", visual_prompt: r.label, reference_labels: [r.label], locked: false })),
+  ];
 
   let location = "";
   const scenes: Breakdown["scenes"] = [];
@@ -44,6 +63,7 @@ export function quickSplit(p: Project): Breakdown {
     if (newLocation) location = newLocation;
 
     const cast = characters.filter((c) => mentions(block.text, c.name)).map((c) => c.name);
+    const shown = products.filter((x) => x.locked || mentions(block.text, x.name));
     const dialogue = [...block.text.matchAll(/^\s*([A-Z][\p{L}'. -]{0,30}?)\s*(?:\([^)]*\))?\s*:\s*(.+)$/gmu)]
       .filter((m) => speakers.has(titleCase(m[1].trim())))
       .map((m) => `${titleCase(m[1].trim())}: "${m[2].trim().replace(/^"|"$/g, "")}"`)
@@ -54,6 +74,7 @@ export function quickSplit(p: Project): Breakdown {
       const where = location ? ` Location: ${location}.` : "";
       const who = cast.length ? ` Characters: ${cast.join(", ")}.` : "";
       const look = style ? ` Style: ${style}.` : "";
+      const product = shown.length ? ` Product: ${shown.map((x) => `${x.name} (${x.visual_prompt})`).join("; ")}, shown clearly.` : "";
       scenes.push({
         title: block.title || piece.split(/[.!?]/)[0].slice(0, 48),
         duration_seconds: seconds,
@@ -61,17 +82,25 @@ export function quickSplit(p: Project): Breakdown {
         characters: cast,
         action: piece,
         shot: "",
-        image_prompt: `${piece}${who}${where}${look}`.trim(),
-        video_prompt: `${piece}${dialogue ? ` ${dialogue}` : ""}${who}${where}${look}`.trim(),
+        image_prompt: `${piece}${who}${product}${where}${look}`.trim(),
+        video_prompt: `${piece}${dialogue ? ` ${dialogue}` : ""}${who}${product}${where}${look}`.trim(),
         dialogue,
         sound: "",
         continues_previous: scenes.length > 0 && continues,
+        products: shown.map((x) => x.name),
       });
     }
   }
 
   const firstLine = p.script.trim().split("\n")[0].replace(/^#+\s*/, "").slice(0, 60);
-  return { title: firstLine, logline: "", style_guide: style, characters, scenes };
+  return {
+    title: firstLine,
+    logline: "",
+    style_guide: style,
+    characters,
+    products: products.map(({ locked: _locked, ...x }) => x),
+    scenes,
+  };
 }
 
 interface Block {

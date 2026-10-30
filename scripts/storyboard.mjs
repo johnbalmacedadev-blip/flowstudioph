@@ -46,9 +46,18 @@ try {
   } else if (cmd === "show") {
     const p = await find(target);
     console.log(`# ${p.name}  (id ${p.id})`);
-    console.log(`aspect ${p.settings.aspectRatio} · seconds per scene ${p.settings.seconds} · style: ${p.settings.style || "(none)"}`);
+    console.log(`aspect ${p.settings.aspectRatio} · seconds per scene ${p.settings.seconds} · video style: ${p.settings.videoStyle ?? "cinematic"} · look: ${p.settings.style || "(none)"}`);
     console.log(`\n## References (${p.references.length})`);
     for (const r of p.references) console.log(`- "${r.label}" (${r.kind}): ${path.join(DATA, "projects", p.id, "refs", r.file)}`);
+    if (p.products?.length) {
+      console.log(`\n## Products`);
+      const refs = new Map(p.references.map((r) => [r.id, r]));
+      for (const x of p.products) {
+        console.log(`- ${x.name}${x.locked ? " (LOCKED: in every scene)" : ""}: ${x.visualPrompt || x.description || "(no description yet)"}`);
+        if (x.description && x.visualPrompt) console.log(`  what it is: ${x.description}`);
+        for (const id of x.referenceIds) if (refs.get(id)) console.log(`  photo "${refs.get(id).label}": ${path.join(DATA, "projects", p.id, "refs", refs.get(id).file)}`);
+      }
+    }
     if (p.characters.length) {
       console.log(`\n## Current cast`);
       for (const c of p.characters) console.log(`- ${c.name}: ${c.visualPrompt}`);

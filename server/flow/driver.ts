@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Page } from "playwright-core";
-import type { Character, Project, Scene } from "../../shared/types.js";
+import type { Character, Product, Project, Scene } from "../../shared/types.js";
 import { lastFrame } from "../media.js";
 import { ensureDir, refsDir, rendersDir } from "../paths.js";
 import { readSettings } from "../settings.js";
@@ -49,6 +49,23 @@ export async function renderPortrait(p: Project, characterId: string, report: Re
   });
 }
 
+/** A clean product shot from its photos, to check Flow keeps the packaging, label and logo right. */
+export async function renderProductShot(p: Project, productId: string, report: Report) {
+  const x = (p.products ?? []).find((y) => y.id === productId);
+  if (!x) throw new Error("Product not found");
+  const prompt = [
+    `Product photo of ${x.name}: ${x.visualPrompt || x.description}.`,
+    "Centred on a clean neutral surface, soft even light, the label facing the camera, sharp focus, no text added.",
+    productLock([x]),
+  ].join(" ");
+  return generate(p, report, `product-${x.id}`, {
+    kind: "image",
+    prompt,
+    aspect: p.settings.aspectRatio,
+    attachments: productRefs(p, [x]),
+  });
+}
+
 const CONTINUE_FRAME =
   "Continue the exact same scene as the first reference image: same location, set, props, lighting, time of day and wardrobe, as the next moment of the same shot.";
 
@@ -56,10 +73,12 @@ export async function renderSceneImage(p: Project, sceneId: string, report: Repo
   const s = scene(p, sceneId);
   const prevFrame = s.continuesPrevious ? renderFile(p, previous(p, s)?.imageFile) : undefined;
   if (s.continuesPrevious && !prevFrame) report("No frame for the previous scene yet; matching the cast only.");
-  const refs = characterRefs(p, cast(p, s), true);
+  const products = sceneProducts(p, s);
+  const refs = [...productRefs(p, products), ...characterRefs(p, cast(p, s), true)];
+  const base = prevFrame ? `${CONTINUE_FRAME} ${s.imagePrompt || s.action}` : s.imagePrompt || s.action;
   return generate(p, report, `scene-${pad(s.number)}-frame`, {
     kind: "image",
-    prompt: prevFrame ? `${CONTINUE_FRAME} ${s.imagePrompt || s.action}` : s.imagePrompt || s.action,
+    prompt: `${withLocks(p, base, products)} ${NO_TEXT}`,
     aspect: p.settings.aspectRatio,
     attachments: (prevFrame ? [upload(prevFrame), ...refs] : refs).slice(0, MAX_ATTACHMENTS),
   });
@@ -82,13 +101,16 @@ export async function renderSceneVideo(p: Project, sceneId: string, report: Repo
     }
   }
   start ??= renderFile(p, s.imageFile);
+  // From a start frame the product is already in the picture; without one, its photos go in first.
+  const products = sceneProducts(p, s);
+  const refs = [...productRefs(p, products), ...characterRefs(p, cast(p, s), true)].slice(0, MAX_ATTACHMENTS);
   const { file, src } = await generateMedia(p, report, `scene-${pad(s.number)}-clip`, {
     kind: "video",
-    prompt: s.videoPrompt || s.action,
+    prompt: withLocks(p, s.videoPrompt || s.action, products),
     aspect: p.settings.aspectRatio,
     durationSec: s.durationSec,
     videoMode: start ? "frames" : "ingredients",
-    attachments: start ? [upload(start)] : characterRefs(p, cast(p, s), true),
+    attachments: start ? [upload(start)] : refs,
   });
   updateProject(p.id, (x) => {
     const sc = x.scenes.find((y) => y.id === s.id);
@@ -275,6 +297,39 @@ function scene(p: Project, id: string) {
 
 function cast(p: Project, s: Scene) {
   return p.characters.filter((c) => s.characterIds.includes(c.id));
+}
+
+/** Products in a scene: the ones it lists, plus every locked product. */
+function sceneProducts(p: Project, s: Scene) {
+  return (p.products ?? []).filter((x) => x.locked || s.productIds?.includes(x.id));
+}
+
+/** Up to two photos per product, so a product never crowds the cast out of Flow's three references. */
+function productRefs(p: Project, products: Product[]): Attachment[] {
+  return products
+    .flatMap((x) => p.references.filter((r) => x.referenceIds.includes(r.id)).slice(0, 2))
+    .map((r) => ({ name: `fsph-${r.id}${path.extname(r.file)}`, file: path.join(refsDir(p.id), r.file) }))
+    .filter((a) => fs.existsSync(a.file));
+}
+
+function productLock(products: Product[]) {
+  return products
+    .map(
+      (x) =>
+        `Product: ${x.name}${x.visualPrompt ? `, ${x.visualPrompt}` : ""}. Show this exact product exactly as in its reference photo: same packaging shape, colours, label text and logo, unchanged, clearly visible, label facing the camera.`,
+    )
+    .join(" ");
+}
+
+const UGC_LOOK =
+  "Authentic UGC look: smartphone footage, handheld, natural window or home light, a real person in a real everyday setting, no studio lighting or cinematic colour grading.";
+
+/** Added at render time, so they hold even after you edit a scene's prompt by hand. */
+/** Stills are frames of a clip: spoken lines in the prompt must not turn into burned-in subtitles. */
+const NO_TEXT = "A still frame: no subtitles, captions or on-screen text (only text printed on real objects, like the product label).";
+
+function withLocks(p: Project, prompt: string, products: Product[]) {
+  return [prompt, productLock(products), p.settings.videoStyle === "ugc" ? UGC_LOOK : ""].filter(Boolean).join(" ");
 }
 
 /** A character's rendered portrait if there is one, else their reference images; at most 3 in total. */

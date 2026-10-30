@@ -315,3 +315,30 @@ input[type="range"] { padding: 0; accent-color: var(--accent); border: none; box
 .steps.compact { margin: 0; gap: 10px; }
 .copy-row { display: flex; gap: 8px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
 .copy-row code { font-size: 13px; padding: 6px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+
+/* ---- products ---- */
+.section-title { margin: 4px 0 -6px; font: 600 15px var(--display); }
+.products.highlight { border-color: rgba(255, 90, 60, 0.45); box-shadow: 0 0 0 3px var(--accent-soft); }
+.small-empty { padding: 16px; }
+.product-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 14px; }
+.product { display: grid; grid-template-columns: 150px 1fr; gap: 14px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
+.product-photos { position: relative; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; align-content: start; }
+.product-photo { position: relative; }
+.product-photo img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); background: #fff; }
+.product-photo .icon-btn { position: absolute; top: 2px; right: 2px; width: 22px; height: 22px; font-size: 13px; background: rgba(13, 14, 18, 0.7); }
+.product-photo.shot img { border-color: rgba(62, 207, 142, 0.6); }
+.product-photo .tag { position: absolute; bottom: 4px; left: 4px; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 999px; background: rgba(62, 207, 142, 0.85); color: #06170f; }
+.product-add { aspect-ratio: 1; border: 1.5px dashed var(--line); border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; font-size: 12px; }
+.product-add:hover { border-color: var(--accent); color: var(--text); }
+.product-body { display: grid; gap: 8px; min-width: 0; }
+.product-body .title-input { flex: 1; }
+.chip.lock { white-space: nowrap; }
+.chip.product-chip { border-color: rgba(255, 179, 71, 0.45); }
+.chip.product-chip.on { background: rgba(255, 179, 71, 0.14); color: var(--accent-2); }
+@media (max-width: 760px) { .product-grid { grid-template-columns: 1fr; } .product { grid-template-columns: 1fr; } }
+
+/* ---- in-progress buttons ---- */
+.gear { flex: none; animation: spin 1.4s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.btn:disabled:has(.gear) { opacity: 0.85; cursor: progress; }
+@media (prefers-reduced-motion: reduce) { .gear { animation-duration: 4s; } }

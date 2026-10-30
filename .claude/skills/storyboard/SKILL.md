@@ -21,7 +21,7 @@ npm run -s storyboard -- show "<project name or id>"
 their file paths, and any existing cast. If the user didn't say which project, use the one they just mentioned,
 or ask. If the project already has scenes, confirm before replacing them.
 
-**Look at every reference image** (Read the file path) before writing. Characters with a reference image must be
+**Look at every reference image and product photo** (Read the file path) before writing. Characters with a reference image must be
 described from what the image actually shows (age, face, hair, skin, build, clothing), and that reference's label
 goes in their `reference_labels`, so the app attaches the image when it renders. A product, place or style
 reference is described the same way in every prompt that uses it.
@@ -43,6 +43,13 @@ rules the app's other engines use. In short:
 - Continuity: stay in one location unless the source moves; one fixed name and description per location,
   repeated word for word; `continues_previous: true` when a scene picks up in the same place and moment.
 - Respect anything the source says about style, wardrobe, product placement, aspect ratio or format.
+- **Products**: put every product from `show` in `products`, with the exact name it has there, and a
+  `visual_prompt` written from its photos (packaging shape, size, colours, label text, logo). List the product
+  names a scene shows in that scene's `products` (locked products go in every scene). In every prompt where a
+  product appears, describe it exactly and show it clearly, label facing camera. The app also attaches the
+  product photos first and adds a product-lock line at render time.
+- **Video style UGC**: follow `UGC_RULES` in `server/storyboard.ts`: vertical, handheld phone footage, a creator
+  talking to camera in a real setting, natural light, hook first and a call to action at the end.
 
 Write the JSON (the exact `SHAPE` object) to a file in your scratchpad, not in the repo.
 

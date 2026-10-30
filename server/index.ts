@@ -3,12 +3,13 @@ import path from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 import multer from "multer";
 import {
-  DURATIONS, EXPORT_RESOLUTIONS, type Character, type ExportResolution, type Project, type ReferenceKind, type Scene,
+  DURATIONS, EXPORT_RESOLUTIONS, type Character, type ExportResolution, type Product, type Project, type ReferenceKind,
+  type Scene,
 } from "../shared/types.js";
 import { deleteExport, exportFinalCut, resetFinalCut, saveFinalCut, syncFinalCut } from "./finalcut.js";
 import { breakdownWithFlowAgent } from "./flow/agent.js";
 import { connectFlow, flowStatus, setWindowVisible } from "./flow/browser.js";
-import { renderPortrait, renderSceneImage, renderSceneVideo } from "./flow/driver.js";
+import { renderPortrait, renderProductShot, renderSceneImage, renderSceneVideo } from "./flow/driver.js";
 import { cancelJob, listJobs, queueFlowJob, startJob } from "./jobs.js";
 import { PROJECTS_DIR, ensureDir, refsDir, safeId } from "./paths.js";
 import { quickSplit } from "./localsplit.js";
@@ -22,7 +23,7 @@ const PORT = Number(process.env.FSPH_API_PORT ?? 5174);
 const app = express();
 app.use(express.json({ limit: "5mb" }));
 
-const KINDS: ReferenceKind[] = ["character", "location", "style", "prop"];
+const KINDS: ReferenceKind[] = ["character", "product", "location", "style", "prop"];
 const pick = <T extends object>(src: any, keys: (keyof T)[]) =>
   Object.fromEntries(keys.filter((k) => src?.[k] !== undefined).map((k) => [k, src[k]])) as Partial<T>;
 
@@ -48,6 +49,7 @@ app.put("/api/projects/:id", (req, res) => {
         if (s.seconds === "auto" || DURATIONS.includes(s.seconds)) p.settings.seconds = s.seconds;
         if (typeof s.style === "string") p.settings.style = s.style;
         if (s.engine === "flow" || s.engine === "local" || s.engine === "claude") p.settings.engine = s.engine;
+        if (s.videoStyle === "cinematic" || s.videoStyle === "ugc") p.settings.videoStyle = s.videoStyle;
       }
     }),
   );
@@ -72,15 +74,19 @@ app.post("/api/projects/:id/references", upload.array("files", 20), (req, res) =
   const kind = KINDS.includes(req.body.kind) ? (req.body.kind as ReferenceKind) : "character";
   res.json(
     updateProject(safeId(String(req.params.id)), (p) => {
+      // Photos uploaded from a product card are linked to that product straight away.
+      const product = p.products?.find((x) => x.id === req.body.productId);
       for (const f of files) {
         const base = path.parse(f.originalname).name.replace(/[_-]+/g, " ").trim();
-        p.references.push({
+        const ref = {
           id: newId(),
-          label: (files.length === 1 && req.body.label?.trim()) || base || "Reference",
-          kind,
+          label: (files.length === 1 && req.body.label?.trim()) || product?.name || base || "Reference",
+          kind: product ? ("product" as const) : kind,
           file: f.filename,
           mime: f.mimetype,
-        });
+        };
+        p.references.push(ref);
+        product?.referenceIds.push(ref.id);
       }
     }),
   );
@@ -103,6 +109,7 @@ app.delete("/api/projects/:id/references/:refId", (req, res) => {
       fs.rmSync(path.join(refsDir(p.id), r.file), { force: true });
       p.references = p.references.filter((x) => x.id !== r.id);
       for (const c of p.characters) c.referenceIds = c.referenceIds.filter((id) => id !== r.id);
+      for (const x of p.products ?? []) x.referenceIds = x.referenceIds.filter((id) => id !== r.id);
     }),
   );
 });
@@ -138,7 +145,7 @@ app.post("/api/projects/:id/storyboard", (req, res) => {
 
 // ---- characters & scenes ----
 const SCENE_FIELDS: (keyof Scene)[] = [
-  "title", "durationSec", "location", "characterIds", "action", "shot", "imagePrompt", "videoPrompt", "dialogue", "sound", "continuesPrevious",
+  "title", "durationSec", "location", "characterIds", "action", "shot", "imagePrompt", "videoPrompt", "dialogue", "sound", "continuesPrevious", "productIds",
 ];
 const CHAR_FIELDS: (keyof Character)[] = ["name", "role", "description", "visualPrompt", "referenceIds"];
 
@@ -205,6 +212,36 @@ app.post("/api/projects/:id/characters", (req, res) => {
     }),
   );
 });
+// ---- products ----
+const PRODUCT_FIELDS: (keyof Product)[] = ["name", "description", "visualPrompt", "referenceIds", "locked"];
+app.post("/api/projects/:id/products", (req, res) => {
+  res.json(
+    updateProject(safeId(req.params.id), (p) => {
+      p.products ??= [];
+      p.products.push({
+        id: newId(), name: String(req.body?.name || "New product"), description: "", visualPrompt: "", referenceIds: [],
+        locked: p.products.length === 0, // the first product is locked to every scene by default
+      });
+    }),
+  );
+});
+app.put("/api/projects/:id/products/:productId", (req, res) => {
+  res.json(
+    updateProject(safeId(req.params.id), (p) => {
+      const x = p.products?.find((y) => y.id === req.params.productId);
+      if (x) Object.assign(x, pick<Product>(req.body, PRODUCT_FIELDS));
+    }),
+  );
+});
+app.delete("/api/projects/:id/products/:productId", (req, res) => {
+  res.json(
+    updateProject(safeId(req.params.id), (p) => {
+      p.products = (p.products ?? []).filter((x) => x.id !== req.params.productId);
+      for (const s of p.scenes) s.productIds = s.productIds?.filter((id) => id !== req.params.productId);
+    }),
+  );
+});
+
 app.delete("/api/projects/:id/characters/:charId", (req, res) => {
   res.json(
     updateProject(safeId(req.params.id), (p) => {
@@ -215,50 +252,46 @@ app.delete("/api/projects/:id/characters/:charId", (req, res) => {
 });
 
 // ---- rendering in Flow ----
-type RenderKind = "portrait" | "image" | "video";
+type RenderKind = "portrait" | "product" | "image" | "video";
+
+/** For each kind of render: what it renders, which fields hold its status and file, and how it's done. */
+const RENDERS: Record<RenderKind, {
+  list: (p: Project) => { id: string }[];
+  fields: { status: string; file: string };
+  label: (t: any) => string;
+  run: (p: Project, id: string, report: (s: string) => void) => Promise<string>;
+}> = {
+  portrait: { list: (p) => p.characters, fields: { status: "portraitStatus", file: "portraitFile" }, label: (c: Character) => `Portrait: ${c.name}`, run: renderPortrait },
+  product: { list: (p) => p.products ?? [], fields: { status: "shotStatus", file: "shotFile" }, label: (x: Product) => `Product shot: ${x.name}`, run: renderProductShot },
+  image: { list: (p) => p.scenes, fields: { status: "imageStatus", file: "imageFile" }, label: (s: Scene) => `Scene ${s.number} image`, run: renderSceneImage },
+  video: { list: (p) => p.scenes, fields: { status: "videoStatus", file: "videoFile" }, label: (s: Scene) => `Scene ${s.number} video`, run: renderSceneVideo },
+};
 
 app.post("/api/projects/:id/render", (req, res) => {
   const id = safeId(req.params.id);
   const kind = req.body?.kind as RenderKind;
-  if (!["portrait", "image", "video"].includes(kind)) return void res.status(400).json({ error: "Unknown render kind" });
-  const project = getProject(id);
+  const render = RENDERS[kind];
+  if (!render) return void res.status(400).json({ error: "Unknown render kind" });
   const ids: string[] | undefined = Array.isArray(req.body?.ids) ? req.body.ids : undefined;
-  const targets =
-    kind === "portrait"
-      ? project.characters.filter((c) => !ids || ids.includes(c.id))
-      : project.scenes.filter((s) => !ids || ids.includes(s.id));
+  const targets = render.list(getProject(id)).filter((t) => !ids || ids.includes(t.id));
 
-  const setStatus = (targetId: string, status: Scene["imageStatus"], extra: Partial<Scene & Character> = {}) =>
+  const setStatus = (targetId: string, status: Scene["imageStatus"], extra: Record<string, unknown> = {}) =>
     updateProject(id, (p) => {
-      if (kind === "portrait") {
-        const c = p.characters.find((x) => x.id === targetId);
-        if (c) Object.assign(c, { portraitStatus: status, ...extra });
-      } else {
-        const s = p.scenes.find((x) => x.id === targetId);
-        if (s) Object.assign(s, { [kind === "image" ? "imageStatus" : "videoStatus"]: status, ...extra });
-      }
+      const t = render.list(p).find((x) => x.id === targetId);
+      if (t) Object.assign(t, { [render.fields.status]: status, ...extra });
     });
 
   const jobs = targets.map((t) => {
     setStatus(t.id, "queued", { error: undefined });
-    const label =
-      kind === "portrait" ? `Portrait: ${(t as Character).name}` : `Scene ${(t as Scene).number} ${kind}`;
     return queueFlowJob(
       kind,
       id,
-      label,
+      render.label(t),
       async (report) => {
         setStatus(t.id, "running");
         try {
-          const p = getProject(id);
-          const file =
-            kind === "portrait"
-              ? await renderPortrait(p, t.id, report)
-              : kind === "image"
-                ? await renderSceneImage(p, t.id, report)
-                : await renderSceneVideo(p, t.id, report);
-          const key = kind === "portrait" ? "portraitFile" : kind === "image" ? "imageFile" : "videoFile";
-          setStatus(t.id, "done", { [key]: file });
+          const file = await render.run(getProject(id), t.id, report);
+          setStatus(t.id, "done", { [render.fields.file]: file });
         } catch (e) {
           setStatus(t.id, "failed", { error: (e as Error).message });
           throw e;

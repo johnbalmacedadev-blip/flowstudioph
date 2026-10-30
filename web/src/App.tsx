@@ -12,7 +12,7 @@ import { StoryboardTab } from "./components/StoryboardTab";
 type Tab = "script" | "characters" | "storyboard" | "finalcut";
 const TABS: { id: Tab; label: string }[] = [
   { id: "script", label: "1 · Script & references" },
-  { id: "characters", label: "2 · Characters" },
+  { id: "characters", label: "2 · Cast & Products" },
   { id: "storyboard", label: "3 · Storyboard" },
   { id: "finalcut", label: "4 · Final Cut" },
 ];
@@ -151,7 +151,9 @@ export default function App() {
                 {TABS.map((t) => (
                   <button key={t.id} className={`tab ${tab === t.id ? "active" : ""}`} onClick={() => setTab(t.id)}>
                     {t.label}
-                    {t.id === "characters" && project.characters.length > 0 && <span className="count">{project.characters.length}</span>}
+                    {t.id === "characters" && project.characters.length + (project.products?.length ?? 0) > 0 && (
+                      <span className="count">{project.characters.length + (project.products?.length ?? 0)}</span>
+                    )}
                     {t.id === "storyboard" && project.scenes.length > 0 && <span className="count">{project.scenes.length}</span>}
                     {t.id === "finalcut" && project.scenes.some((s) => s.videoFile) && (
                       <span className="count">{project.scenes.filter((s) => s.videoFile).length}</span>

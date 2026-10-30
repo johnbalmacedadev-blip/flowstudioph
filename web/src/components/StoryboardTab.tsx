@@ -2,6 +2,7 @@ import { Fragment, useState } from "react";
 import { DURATIONS, type Duration, type FlowStatus, type Project, type Scene } from "../../../shared/types";
 import { api, fileUrl } from "../api";
 import { Editable } from "./Editable";
+import { isBusy, RenderLabel } from "./Busy";
 import { StatusBadge } from "./StatusBadge";
 
 interface Props {
@@ -20,6 +21,9 @@ export function StoryboardTab({ project, flow, onChange, onError }: Props) {
     api.render(id, kind, ids).catch((e) => onError(e.message));
   };
   const total = project.scenes.reduce((n, s) => n + s.durationSec, 0);
+  // How many frames / clips are waiting or rendering, shown on the "Render all" buttons ("Rendering clips… 3").
+  const framesBusy = project.scenes.filter((s) => isBusy(s.imageStatus)).length;
+  const clipsBusy = project.scenes.filter((s) => isBusy(s.videoStatus)).length;
   const toggle = (sid: string) =>
     setExpanded((cur) => {
       const next = new Set(cur);
@@ -49,8 +53,12 @@ export function StoryboardTab({ project, flow, onChange, onError }: Props) {
           <button className="btn ghost" onClick={() => setExpanded(expanded.size ? new Set() : new Set(project.scenes.map((s) => s.id)))}>
             {expanded.size ? "Collapse all" : "Edit all prompts"}
           </button>
-          <button className="btn" onClick={() => render("image")}>Render all frames</button>
-          <button className="btn primary" onClick={() => render("video")}>Render all clips</button>
+          <button className="btn" onClick={() => render("image")} disabled={framesBusy > 0}>
+            <RenderLabel status={framesBusy ? "running" : "idle"} idle="Render all frames" running={`Rendering frames… ${framesBusy}`} />
+          </button>
+          <button className="btn primary" onClick={() => render("video")} disabled={clipsBusy > 0}>
+            <RenderLabel status={clipsBusy ? "running" : "idle"} idle="Render all clips" running={`Rendering clips… ${clipsBusy}`} />
+          </button>
         </div>
       </div>
 
@@ -113,6 +121,8 @@ function SceneCard({ project, scene: s, first, last, open, onToggle, onPatch, on
 }) {
   const id = project.id;
   const cast = project.characters.filter((c) => s.characterIds.includes(c.id));
+  const products = project.products ?? [];
+  const shown = products.filter((x) => x.locked || s.productIds?.includes(x.id));
   const vertical = project.settings.aspectRatio === "9:16";
 
   return (
@@ -143,6 +153,11 @@ function SceneCard({ project, scene: s, first, last, open, onToggle, onPatch, on
         <div className="scene-meta">
           {s.location && <span className="meta">📍 {s.location}</span>}
           {cast.map((c) => <span key={c.id} className="chip on static">{c.name}</span>)}
+          {shown.map((x) => (
+            <span key={x.id} className="chip on static product-chip" title={x.locked ? "Locked: in every scene" : "In this scene"}>
+              {x.locked ? "🔒" : "📦"} {x.name}
+            </span>
+          ))}
         </div>
 
         <p className="action">{s.action}</p>
@@ -164,6 +179,23 @@ function SceneCard({ project, scene: s, first, last, open, onToggle, onPatch, on
                 })}
               </div>
             </label>
+            {products.length > 0 && (
+              <label className="field">
+                <span>Products in this shot</span>
+                <div className="chips">
+                  {products.map((x) => {
+                    const on = x.locked || !!s.productIds?.includes(x.id);
+                    return (
+                      <button key={x.id} className={`chip product-chip ${on ? "on" : ""}`} disabled={x.locked}
+                        title={x.locked ? "Locked to every scene (unlock it on the Cast & Products tab)" : ""}
+                        onClick={() => onPatch({ productIds: on ? (s.productIds ?? []).filter((y) => y !== x.id) : [...(s.productIds ?? []), x.id] })}>
+                        {x.locked ? "🔒" : "📦"} {x.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </label>
+            )}
             <label className="field"><span>Action</span><Editable multiline rows={2} value={s.action} onSave={(action) => onPatch({ action })} /></label>
             <div className="row">
               <label className="field grow"><span>Location</span><Editable value={s.location} onSave={(location) => onPatch({ location })} /></label>
@@ -181,11 +213,11 @@ function SceneCard({ project, scene: s, first, last, open, onToggle, onPatch, on
         {s.error && <div className="error-text small">{s.error}</div>}
 
         <div className="scene-actions">
-          <button className="btn small" onClick={() => onRender("image")} disabled={busy(s.imageStatus)}>
-            {s.imageFile ? "Re-render frame" : "Render frame"}
+          <button className="btn small" onClick={() => onRender("image")} disabled={isBusy(s.imageStatus)}>
+            <RenderLabel status={s.imageStatus} idle={s.imageFile ? "Re-render frame" : "Render frame"} running="Rendering frame…" />
           </button>
-          <button className="btn small primary" onClick={() => onRender("video")} disabled={busy(s.videoStatus)}>
-            {s.videoFile ? "Re-render clip" : `Render ${s.durationSec}s clip`}
+          <button className="btn small primary" onClick={() => onRender("video")} disabled={isBusy(s.videoStatus)}>
+            <RenderLabel status={s.videoStatus} idle={s.videoFile ? "Re-render clip" : `Render ${s.durationSec}s clip`} running="Rendering clip…" />
           </button>
           <button className="btn small ghost" onClick={onToggle}>{open ? "Done editing" : "Edit prompts"}</button>
           <span className="grow" />
@@ -199,5 +231,4 @@ function SceneCard({ project, scene: s, first, last, open, onToggle, onPatch, on
   );
 }
 
-const busy = (s: Scene["imageStatus"]) => s === "queued" || s === "running";
 const formatTime = (sec: number) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;

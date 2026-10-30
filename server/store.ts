@@ -72,13 +72,19 @@ export function resetInterruptedRenders() {
   for (const { id } of listProjects()) {
     const p = getProject(id);
     const stuck = (s: string) => s === "queued" || s === "running";
-    if (![...p.scenes.flatMap((s) => [s.imageStatus, s.videoStatus]), ...p.characters.map((c) => c.portraitStatus)].some(stuck)) continue;
+    const statuses = [
+      ...p.scenes.flatMap((s) => [s.imageStatus, s.videoStatus]),
+      ...p.characters.map((c) => c.portraitStatus),
+      ...(p.products ?? []).map((y) => y.shotStatus ?? "idle"),
+    ];
+    if (!statuses.some(stuck)) continue;
     updateProject(id, (x) => {
       for (const s of x.scenes) {
         if (stuck(s.imageStatus)) Object.assign(s, { imageStatus: "idle", error: note });
         if (stuck(s.videoStatus)) Object.assign(s, { videoStatus: "idle", error: note });
       }
       for (const c of x.characters) if (stuck(c.portraitStatus)) Object.assign(c, { portraitStatus: "idle", error: note });
+      for (const y of x.products ?? []) if (y.shotStatus && stuck(y.shotStatus)) Object.assign(y, { shotStatus: "idle", error: note });
     });
   }
 }

@@ -3,7 +3,7 @@ import path from "node:path";
 import type { Page } from "playwright-core";
 import type { Project } from "../../shared/types.js";
 import { DATA_DIR, ensureDir } from "../paths.js";
-import { chunkScript, merge, parseBreakdown, RULES, SHAPE, timingRule, type Breakdown } from "../storyboard.js";
+import { chunkScript, merge, parseBreakdown, projectBrief, RULES, SHAPE, timingRule, type Breakdown } from "../storyboard.js";
 import { getFlowPage } from "./browser.js";
 import { openProject, resetComposer } from "./driver.js";
 
@@ -90,6 +90,7 @@ function buildPrompt(p: Project, part: string, index: number, total: number, don
     RULES,
     timingRule(p),
     `Aspect ratio: ${p.settings.aspectRatio}.`,
+    projectBrief(p),
     p.settings.style ? `Requested visual style: ${p.settings.style}` : "",
     refs ? `Reference images in this project (use these exact labels in reference_labels): ${refs}.` : "",
     total > 1 ? `This is part ${index + 1} of ${total} of a longer source; write only this part's scenes.` : "",

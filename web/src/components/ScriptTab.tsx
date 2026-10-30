@@ -5,7 +5,7 @@ import {
 import { api, fileUrl } from "../api";
 import { Editable } from "./Editable";
 
-const KINDS: ReferenceKind[] = ["character", "location", "style", "prop"];
+const KINDS: ReferenceKind[] = ["character", "product", "location", "style", "prop"];
 
 interface Props {
   project: Project;
@@ -72,6 +72,20 @@ export function ScriptTab({ project, jobs, flow, onChange, onError, onDone }: Pr
           <label className="field grow">
             <span>Project name</span>
             <Editable value={project.name} onSave={(name) => run(api.updateProject(id, { name }))} />
+          </label>
+          <label className="field">
+            <span>Video style</span>
+            <div className="segmented">
+              <button className={(project.settings.videoStyle ?? "cinematic") === "cinematic" ? "on" : ""}
+                onClick={() => setSetting({ videoStyle: "cinematic" })} title="Film-like shots: composed framing, camera moves, graded light.">
+                🎬 Cinematic
+              </button>
+              <button className={project.settings.videoStyle === "ugc" ? "on" : ""}
+                onClick={() => setSetting({ videoStyle: "ugc", aspectRatio: "9:16" })}
+                title="Creator-style phone video: handheld, talking to camera, natural light, real places, hook and call to action. Switches to 9:16.">
+                📱 UGC
+              </button>
+            </div>
           </label>
           <label className="field">
             <span>Aspect ratio</span>

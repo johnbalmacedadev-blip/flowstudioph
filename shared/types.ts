@@ -7,7 +7,7 @@ export type SecondsSetting = Duration | "auto";
 
 export type AspectRatio = "16:9" | "9:16";
 
-export type ReferenceKind = "character" | "location" | "style" | "prop";
+export type ReferenceKind = "character" | "product" | "location" | "style" | "prop";
 
 export interface Reference {
   id: string;
@@ -19,6 +19,26 @@ export interface Reference {
 }
 
 export type RenderStatus = "idle" | "queued" | "running" | "done" | "failed";
+
+/**
+ * A product shown in the video (UGC ads especially). Its photos are attached first when rendering and its
+ * description is added to every prompt it appears in, so the packaging, label and logo stay exactly right.
+ */
+export interface Product {
+  id: string;
+  name: string;
+  /** What it is and what it does, for the storyboard (e.g. "vitamin C serum, brightens skin"). */
+  description: string;
+  /** Exact look: packaging shape, colours, label text, logo. Repeated in every prompt. */
+  visualPrompt: string;
+  referenceIds: string[];
+  /** Locked products are in every scene; others only in scenes that list them. */
+  locked: boolean;
+  /** A free product shot rendered in Flow, to check it reproduces the product faithfully. */
+  shotStatus?: RenderStatus;
+  shotFile?: string;
+  error?: string;
+}
 
 export interface Character {
   id: string;
@@ -51,6 +71,8 @@ export interface Scene {
    * starts on the previous clip's last frame, so the cut is seamless.
    */
   continuesPrevious: boolean;
+  /** Products shown in this scene (locked products are added to every scene anyway). */
+  productIds?: string[];
   imageStatus: RenderStatus;
   imageFile?: string;
   videoStatus: RenderStatus;
@@ -99,12 +121,17 @@ export interface ExportFile {
  */
 export type StoryboardEngine = "flow" | "local" | "claude";
 
+/** "ugc": creator-style phone video (talking to camera, handheld, natural light) instead of cinematic shots. */
+export type VideoStyle = "cinematic" | "ugc";
+
 export interface ProjectSettings {
   aspectRatio: AspectRatio;
   seconds: SecondsSetting;
   style: string;
   /** Missing on older projects: treated as "flow". */
   engine?: StoryboardEngine;
+  /** Missing on older projects: treated as "cinematic". */
+  videoStyle?: VideoStyle;
 }
 
 export interface Project {
@@ -118,6 +145,8 @@ export interface Project {
   styleGuide: string;
   references: Reference[];
   characters: Character[];
+  /** Missing on older projects: treated as none. */
+  products?: Product[];
   scenes: Scene[];
   /** The Flow project this one renders into; created on the first render. */
   flowProjectUrl?: string;
@@ -138,7 +167,7 @@ export interface AppSettings {
   maxCreditsPerClip: number;
 }
 
-export type JobKind = "breakdown" | "portrait" | "image" | "video" | "export";
+export type JobKind = "breakdown" | "portrait" | "product" | "image" | "video" | "export";
 
 export interface Job {
   id: string;

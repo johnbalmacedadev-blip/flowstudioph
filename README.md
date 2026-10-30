@@ -12,7 +12,9 @@ Your script ──> Flow Studio PH ──> Chrome (signed in to Flow) ──> Fl
 ## What it does
 
 1. **Script & references.** Paste anything: a screenplay, a scene-by-scene workflow, or a long master prompt.
-   Pick 16:9 or 9:16 and how many **seconds per scene** (4, 6, 8, 10, or let the storyboard choose). Drop in reference
+   Pick **🎬 Cinematic** or **📱 UGC** (creator-style phone video: handheld, talking to camera, natural light,
+   real settings, a hook first and a call to action last; switches to 9:16), 16:9 or 9:16, and how many
+   **seconds per scene** (4, 6, 8, 10, or let the storyboard choose). Drop in reference
    images and name them after who or what they show ("Lola Nena", "Sari-sari store").
 2. **Generate storyboard**, with any of three engines (none needs an API key):
    - **🤖 Claude Code**: fastest and most reliable. Open Claude Code in this folder and say
@@ -27,9 +29,15 @@ Your script ──> Flow Studio PH ──> Chrome (signed in to Flow) ──> Fl
    - **⚡ Quick split**: no AI, on this computer, instant. Follows the script's own structure (Scene / Shot
      headings, `INT./EXT.`, numbered shots, `NAME:` dialogue, paragraphs). Best for scripts already written scene
      by scene; edit the prompts afterwards.
-3. **Characters.** Edit each look and render a free portrait in Flow to check it.
+3. **Cast & Products.** Edit each character's look and render a free portrait in Flow to check it.
+   **Products** (for ads and UGC): upload clear photos of the product (front label, packaging) and describe its
+   exact look. **🔒 Locked** products are in every scene; others only in the scenes you tick. Whenever a product
+   is in a shot, its photos are attached to Flow first and the prompt says to keep its packaging, colours, label
+   text and logo exactly as photographed. **Render product shot** (free) shows how Flow reproduces it.
 4. **Storyboard.** Edit, reorder, retime, add or delete scenes. Render a free **frame** per scene, then the paid
-   **clip**. Character portraits are attached to every frame so people stay on-model.
+   **clip**. Character portraits are attached to every frame so people stay on-model. Frames never get
+   subtitles burned in; clips speak the dialogue. A spinning gear on a render button means it's queued or
+   rendering.
 5. **Seamless scenes.** The storyboard keeps the story in one location unless the script moves it, and marks each scene
    that continues from the one before. Between scenes the storyboard shows **🔗 Seamless** or **✂ Cut**; click it
    to switch. A seamless scene's frame is matched to the previous frame, and its clip **starts on the last frame
