@@ -1,0 +1,7 @@
+node_modules/
+dist/
+# Local data: projects, uploads, renders, your API key and the signed-in Chrome profile
+data/
+.env
+*.log
+.claude/
