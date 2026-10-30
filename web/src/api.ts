@@ -1,5 +1,6 @@
 import type {
-  AppSettings, Character, FlowStatus, Job, Project, ProjectSettings, ProjectSummary, ReferenceKind, Scene,
+  AppSettings, Character, ExportResolution, FinalCut, FlowStatus, Job, Project, ProjectSettings, ProjectSummary,
+  ReferenceKind, Scene,
 } from "../../shared/types";
 
 async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
@@ -19,7 +20,7 @@ const P = (id: string) => `/api/projects/${id}`;
 
 export const api = {
   settings: () => call<AppSettings>("GET", "/api/settings"),
-  saveSettings: (s: { apiKey?: string; model?: string; effort?: string; maxCreditsPerClip?: number }) =>
+  saveSettings: (s: { maxCreditsPerClip?: number }) =>
     call<AppSettings>("PUT", "/api/settings", s),
 
   projects: () => call<ProjectSummary[]>("GET", "/api/projects"),
@@ -41,6 +42,7 @@ export const api = {
   deleteRef: (id: string, refId: string) => call<Project>("DELETE", `${P(id)}/references/${refId}`),
 
   breakdown: (id: string) => call<Job>("POST", `${P(id)}/breakdown`),
+  importStoryboard: (id: string, json: string) => call<Project>("POST", `${P(id)}/storyboard`, { json }),
 
   updateScene: (id: string, sceneId: string, patch: Partial<Scene>) => call<Project>("PUT", `${P(id)}/scenes/${sceneId}`, patch),
   addScene: (id: string, afterId?: string) => call<Project>("POST", `${P(id)}/scenes`, { afterId }),
@@ -56,6 +58,12 @@ export const api = {
   render: (id: string, kind: "portrait" | "image" | "video", ids?: string[]) =>
     call<Job[]>("POST", `${P(id)}/render`, { kind, ids }),
 
+  finalCut: (id: string) => call<FinalCut>("GET", `${P(id)}/final-cut`),
+  saveFinalCut: (id: string, cut: FinalCut) => call<FinalCut>("PUT", `${P(id)}/final-cut`, cut),
+  resetFinalCut: (id: string) => call<FinalCut>("POST", `${P(id)}/final-cut/reset`),
+  exportCut: (id: string, resolution: ExportResolution) => call<Job>("POST", `${P(id)}/export`, { resolution }),
+  deleteExport: (id: string, file: string) => call<Project>("DELETE", `${P(id)}/exports/${file}`),
+
   jobs: (projectId?: string) => call<Job[]>("GET", `/api/jobs${projectId ? `?projectId=${projectId}` : ""}`),
   cancelJob: (jobId: string) => call<Job | null>("POST", `/api/jobs/${jobId}/cancel`),
 
@@ -64,5 +72,5 @@ export const api = {
   flowWindow: (visible: boolean) => call<FlowStatus>("POST", "/api/flow/window", { visible }),
 };
 
-export const fileUrl = (projectId: string, folder: "refs" | "renders", file: string) =>
+export const fileUrl = (projectId: string, folder: "refs" | "renders" | "exports", file: string) =>
   `/files/${projectId}/${folder}/${file}`;

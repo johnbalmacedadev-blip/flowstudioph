@@ -37,7 +37,7 @@ async function run(job: Job, runner: Runner) {
   try {
     await runner((p) => (job.progress = p), job);
     job.status = "done";
-    if (job.kind !== "breakdown") job.progress = "Done";
+    if (job.kind !== "breakdown" && job.kind !== "export") job.progress = "Done";
   } catch (e) {
     job.status = "failed";
     job.error = friendlyError(e as Error);
@@ -62,7 +62,7 @@ export function friendlyError(e: Error): string {
   return first.replace(/^(locator|page|browserType)\.\w+: /, "");
 }
 
-/** Claude calls run right away and in parallel. */
+/** Jobs that don't need the Flow window (Quick split, 720p export) run right away and in parallel. */
 export function startJob(kind: JobKind, projectId: string, label: string, runner: Runner, targetId?: string) {
   const job = makeJob(kind, projectId, label, targetId);
   void run(job, runner);

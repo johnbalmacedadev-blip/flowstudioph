@@ -1,18 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import ffmpegPath from "ffmpeg-static";
 import type { Page } from "playwright-core";
 import type { Character, Project, Scene } from "../../shared/types.js";
+import { lastFrame } from "../media.js";
 import { ensureDir, refsDir, rendersDir } from "../paths.js";
 import { readSettings } from "../settings.js";
 import { getProject, updateProject } from "../store.js";
-import { getFlowPage } from "./browser.js";
+import { getBrowser, getFlowPage } from "./browser.js";
 
 type Report = (progress: string) => void;
-
-const execFileAsync = promisify(execFile);
 
 const FLOW_HOME = "https://flow.google.com/?hl=en";
 const IMAGE_TIMEOUT_MS = 4 * 60_000;
@@ -86,7 +82,7 @@ export async function renderSceneVideo(p: Project, sceneId: string, report: Repo
     }
   }
   start ??= renderFile(p, s.imageFile);
-  return generate(p, report, `scene-${pad(s.number)}-clip`, {
+  const { file, src } = await generateMedia(p, report, `scene-${pad(s.number)}-clip`, {
     kind: "video",
     prompt: s.videoPrompt || s.action,
     aspect: p.settings.aspectRatio,
@@ -94,6 +90,164 @@ export async function renderSceneVideo(p: Project, sceneId: string, report: Repo
     videoMode: start ? "frames" : "ingredients",
     attachments: start ? [upload(start)] : characterRefs(p, cast(p, s), true),
   });
+  updateProject(p.id, (x) => {
+    const sc = x.scenes.find((y) => y.id === s.id);
+    if (sc) Object.assign(sc, { videoFlowId: flowVideoId(src), videoHdFile: undefined });
+  });
+  return file;
+}
+
+/**
+ * Flow's 1080p AI upscale of a scene's clip, downloaded next to it (once; later exports reuse it).
+ * Flow does the work: it takes about a minute per clip and is free on paid Google AI plans.
+ */
+export async function upscaleClip(p: Project, sceneId: string, report: Report): Promise<string> {
+  const s = scene(p, sceneId);
+  const original = renderFile(p, s.videoFile);
+  if (!original) throw new Error(`Scene ${s.number} has no clip to upscale.`);
+  const existing = renderFile(p, s.videoHdFile);
+  if (existing) return existing;
+
+  const page = await getFlowPage();
+  await openProject(page, p);
+  for (let i = 0; i < 3; i++) await page.keyboard.press("Escape");
+  report(`Finding scene ${s.number}'s clip in Flow…`);
+  const { tile, id } = await findClipTile(page, s.videoFlowId, fs.statSync(original).size);
+  if (id !== s.videoFlowId) {
+    updateProject(p.id, (x) => {
+      const sc = x.scenes.find((y) => y.id === s.id);
+      if (sc) sc.videoFlowId = id;
+    });
+  }
+
+  // Have Chrome save downloads into the renders folder under a temporary name, and tell us when done.
+  const dir = ensureDir(rendersDir(p.id));
+  const cdp = await (await getBrowser()).newBrowserCDPSession();
+  try {
+    await cdp.send("Browser.setDownloadBehavior", { behavior: "allowAndName", downloadPath: dir, eventsEnabled: true });
+    const finished = new Promise<{ guid: string; state: string }>((resolve) =>
+      cdp.on("Browser.downloadProgress", (e: { guid: string; state: string }) => {
+        if (e.state !== "inProgress") resolve(e);
+      }),
+    );
+    await tile.evaluate((t) => t.scrollIntoView({ block: "center" }));
+    await tile.hover({ position: { x: 40, y: 12 }, force: true });
+    await tile.locator('[aria-label="More options"]').first().click();
+    const menu = page.locator(".cdk-overlay-container [role=menuitem]");
+    await menu.filter({ hasText: /download/i }).first().click();
+    await menu.filter({ hasText: "1080p" }).first().click();
+    report(`Flow is upscaling scene ${s.number} to 1080p (about a minute)…`);
+    const result = await Promise.race([
+      finished,
+      new Promise<{ guid: string; state: string }>((r) => setTimeout(() => r({ guid: "", state: "timeout" }), 10 * 60_000)),
+    ]);
+    if (result.state !== "completed") {
+      throw new Error(result.state === "timeout" ? "Flow's 1080p upscale took too long." : "Flow's 1080p download was cancelled.");
+    }
+    const hd = path.join(dir, path.basename(original).replace(/\.mp4$/i, "") + "-1080p.mp4");
+    fs.renameSync(path.join(dir, result.guid), hd);
+    updateProject(p.id, (x) => {
+      const sc = x.scenes.find((y) => y.id === s.id);
+      if (sc && sc.videoFile === s.videoFile) sc.videoHdFile = path.basename(hd);
+    });
+    return hd;
+  } finally {
+    await cdp.send("Browser.setDownloadBehavior", { behavior: "default" }).catch(() => {});
+    await cdp.detach().catch(() => {});
+    for (let i = 0; i < 3; i++) await page.keyboard.press("Escape").catch(() => {});
+  }
+}
+
+/** Flow's id for a video: the path in its media URL (flow-content.google/video/<id>). */
+function flowVideoId(src: string) {
+  return /\/video\/([\w-]+)/.exec(src)?.[1];
+}
+
+/**
+ * The grid tile for a clip. Found by Flow id when the app recorded one, otherwise by matching the
+ * downloaded file's size against each video's size (for clips rendered before ids were recorded).
+ * Video tiles only load their video when hovered, and the grid only draws what's near the screen,
+ * so it hovers each video tile in turn and scrolls down until the clip turns up.
+ */
+async function findClipTile(page: Page, flowId: string | undefined, size: number) {
+  const videos = page
+    .locator("flow-grid-tile-container")
+    .filter({ has: page.locator('img[alt="Generated video thumbnail"], video') });
+  await page.locator("flow-grid-tile-container").first().waitFor({ timeout: 30_000 });
+  // Start from the top: newest clips are first, and an earlier search may have left the grid scrolled down.
+  await page.evaluate(() => document.querySelectorAll("*").forEach((e) => e.scrollTop > 0 && (e.scrollTop = 0)));
+  await page.waitForTimeout(800);
+  const checked = new Set<string>();
+  let stalePasses = 0;
+  for (let pass = 0; pass < 40 && stalePasses < 3; pass++) {
+    let progressed = false;
+    for (let i = 0; i < (await videos.count()); i++) {
+      const tile = videos.nth(i);
+      // Identify a tile by its thumbnail, or by its video when it's already playing one (no thumbnail then).
+      const key = await tile.evaluate((t) => {
+        const img = t.querySelector("img") as HTMLImageElement | null;
+        const vid = t.querySelector("video") as HTMLVideoElement | null;
+        return (img?.src || vid?.currentSrc || vid?.src || "").split("?")[0];
+      }, undefined, { timeout: 2000 }).catch(() => "");
+      if (key && checked.has(key)) continue;
+      if (key) checked.add(key);
+      progressed = true;
+      // A video's thumbnail carries the same id as the video, so a known id needs no hovering.
+      if (flowId && key.includes(flowId)) return { tile, id: flowId };
+      const src = await hoverForVideo(page, tile);
+      const id = flowVideoId(src);
+      if (!id) continue;
+      checked.add(src.split("?")[0]);
+      if (flowId ? id === flowId : await sameSize(src, size)) return { tile, id };
+    }
+    stalePasses = progressed ? 0 : stalePasses + 1;
+    // Scroll the grid's own container by most of a screen (a mouse wheel does nothing in the hidden window).
+    const atEnd = await page.evaluate(() => {
+      const tile = document.querySelector("flow-grid-tile-container");
+      let el = tile?.parentElement ?? null;
+      while (el && !(el.scrollHeight > el.clientHeight + 4 && /auto|scroll/.test(getComputedStyle(el).overflowY))) el = el.parentElement;
+      const box = el ?? document.scrollingElement!;
+      const before = box.scrollTop;
+      box.scrollTop += box.clientHeight * 0.8;
+      return box.scrollTop === before;
+    });
+    await page.waitForTimeout(1000);
+    if (atEnd && !progressed) break;
+  }
+  throw new Error("Couldn't find this clip in the Flow project. It may have been moved to Flow's Trash.");
+}
+
+async function hoverForVideo(page: Page, tile: ReturnType<Page["locator"]>) {
+  // Flow's prompt box floats over the bottom of the grid and catches hovers there, so bring the tile up
+  // and hover near its top edge (the last row can't scroll to the middle).
+  await tile.evaluate((t) => t.scrollIntoView({ block: "center" }), undefined, { timeout: 3000 }).catch(() => {});
+  await page.waitForTimeout(300);
+  await tile.hover({ position: { x: 40, y: 12 }, timeout: 3000, force: true }).catch(() => {});
+  for (let k = 0; k < 16; k++) {
+    const src = await tile
+      .locator("video")
+      .first()
+      .evaluate((v) => (v as HTMLVideoElement).currentSrc || (v as HTMLVideoElement).src || "", undefined, { timeout: 1000 })
+      .catch(() => "");
+    if (src) return src;
+    await page.waitForTimeout(250);
+  }
+  return "";
+}
+
+/** Flow's signed links ignore HEAD and Range, so start a normal download, read its size, and stop. */
+async function sameSize(src: string, size: number) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 10_000);
+  try {
+    const res = await fetch(src, { signal: ac.signal });
+    return Number(res.headers.get("content-length")) === size;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+    ac.abort();
+  }
 }
 
 // ---------------------------------------------------------------- helpers
@@ -111,16 +265,6 @@ function renderFile(p: Project, file?: string) {
 function previous(p: Project, s: Scene) {
   const i = p.scenes.findIndex((x) => x.id === s.id);
   return i > 0 ? p.scenes[i - 1] : undefined;
-}
-
-/** The clip's final frame as a JPEG next to it (made once, with the FFmpeg bundled with the app). */
-async function lastFrame(clip: string) {
-  const out = clip.replace(/\.[^.]+$/, "-last.jpg");
-  if (fs.existsSync(out)) return out;
-  // -sseof seeks to just before the end; -update keeps overwriting one image, leaving the last frame.
-  await execFileAsync(ffmpegPath as unknown as string, ["-v", "error", "-y", "-sseof", "-0.5", "-i", clip, "-update", "1", "-q:v", "2", out]);
-  if (!fs.existsSync(out)) throw new Error("Couldn't read the last frame of the previous clip.");
-  return out;
 }
 
 function scene(p: Project, id: string) {
@@ -152,6 +296,11 @@ function characterRefs(p: Project, chars: Character[], preferPortrait: boolean):
 // ---------------------------------------------------------------- the Flow page
 
 async function generate(p: Project, report: Report, baseName: string, req: Request) {
+  return (await generateMedia(p, report, baseName, req)).file;
+}
+
+/** Generate in Flow and download the result; returns the saved file name and Flow's URL for it. */
+async function generateMedia(p: Project, report: Report, baseName: string, req: Request) {
   const page = await getFlowPage();
   report("Opening the Flow project…");
   await openProject(page, p);
@@ -193,7 +342,7 @@ async function generate(p: Project, report: Report, baseName: string, req: Reque
   const { bytes, ext } = await download(page, src, req.kind);
   const file = `${baseName}-${Date.now().toString(36)}${ext}`;
   fs.writeFileSync(path.join(ensureDir(rendersDir(p.id)), file), bytes);
-  return file;
+  return { file, src };
 }
 
 /** Flow's id for an image: the path in its media URL (flow-content.google/image/<id> or /asb/<id>). */
@@ -244,7 +393,7 @@ async function clearAttachments(page: Page) {
 }
 
 /** Each app project gets its own Flow project, created on first use and remembered. */
-async function openProject(page: Page, p: Project) {
+export async function openProject(page: Page, p: Project) {
   const saved = getProject(p.id).flowProjectUrl;
   if (saved) {
     if (!page.url().startsWith(saved)) await page.goto(`${saved}?hl=en`, { waitUntil: "domcontentloaded" });
@@ -264,8 +413,14 @@ async function openProject(page: Page, p: Project) {
 
 const composer = (page: Page) => page.locator('[contenteditable="true"][aria-label="What do you want to create?"]').last();
 
-async function resetComposer(page: Page) {
+export async function resetComposer(page: Page) {
   await page.keyboard.press("Escape");
+  // Flow's agent chat (used for storyboards) takes over the composer while its panel is open; close it.
+  const panelClose = page.locator('flow-agent-panel [aria-label="Close"]').first();
+  if (await panelClose.isVisible().catch(() => false)) {
+    await panelClose.click();
+    await page.waitForTimeout(600);
+  }
   const clear = page.locator('[aria-label="Clear prompt"]').last();
   if (await clear.isVisible().catch(() => false)) await clear.click();
   // Direct mode, not Flow's chat agent: the app sets every option itself.

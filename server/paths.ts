@@ -16,6 +16,9 @@ export function refsDir(projectId: string) {
 export function rendersDir(projectId: string) {
   return path.join(projectDir(projectId), "renders");
 }
+export function exportsDir(projectId: string) {
+  return path.join(projectDir(projectId), "exports");
+}
 
 /** Ids come from URLs; never let one escape the data folder. */
 export function safeId(id: string) {

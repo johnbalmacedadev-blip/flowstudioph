@@ -2,13 +2,18 @@ import fs from "node:fs";
 import path from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 import multer from "multer";
-import { DURATIONS, type Character, type Project, type ReferenceKind, type Scene } from "../shared/types.js";
-import { applyBreakdown, breakdownScript } from "./claude.js";
+import {
+  DURATIONS, EXPORT_RESOLUTIONS, type Character, type ExportResolution, type Project, type ReferenceKind, type Scene,
+} from "../shared/types.js";
+import { deleteExport, exportFinalCut, resetFinalCut, saveFinalCut, syncFinalCut } from "./finalcut.js";
+import { breakdownWithFlowAgent } from "./flow/agent.js";
 import { connectFlow, flowStatus, setWindowVisible } from "./flow/browser.js";
 import { renderPortrait, renderSceneImage, renderSceneVideo } from "./flow/driver.js";
 import { cancelJob, listJobs, queueFlowJob, startJob } from "./jobs.js";
 import { PROJECTS_DIR, ensureDir, refsDir, safeId } from "./paths.js";
-import { publicSettings, writeSettings } from "./settings.js";
+import { quickSplit } from "./localsplit.js";
+import { cleanSettingsFile, readSettings, writeSettings } from "./settings.js";
+import { applyBreakdown, parseBreakdown } from "./storyboard.js";
 import {
   createProject, deleteProject, getProject, listProjects, newId, resetInterruptedRenders, updateProject,
 } from "./store.js";
@@ -22,16 +27,10 @@ const pick = <T extends object>(src: any, keys: (keyof T)[]) =>
   Object.fromEntries(keys.filter((k) => src?.[k] !== undefined).map((k) => [k, src[k]])) as Partial<T>;
 
 // ---- settings ----
-app.get("/api/settings", (_req, res) => res.json(publicSettings()));
+app.get("/api/settings", (_req, res) => res.json(readSettings()));
 app.put("/api/settings", (req, res) => {
-  const { apiKey, model, effort, maxCreditsPerClip } = req.body ?? {};
-  writeSettings({
-    ...(typeof apiKey === "string" ? { anthropicApiKey: apiKey.trim() } : {}),
-    ...(typeof model === "string" && model.trim() ? { model: model.trim() } : {}),
-    ...(["low", "medium", "high", "xhigh", "max"].includes(effort) ? { effort } : {}),
-    ...(Number.isInteger(maxCreditsPerClip) && maxCreditsPerClip >= 0 ? { maxCreditsPerClip } : {}),
-  });
-  res.json(publicSettings());
+  const { maxCreditsPerClip } = req.body ?? {};
+  res.json(writeSettings(Number.isInteger(maxCreditsPerClip) && maxCreditsPerClip >= 0 ? { maxCreditsPerClip } : {}));
 });
 
 // ---- projects ----
@@ -48,6 +47,7 @@ app.put("/api/projects/:id", (req, res) => {
         if (s.aspectRatio === "16:9" || s.aspectRatio === "9:16") p.settings.aspectRatio = s.aspectRatio;
         if (s.seconds === "auto" || DURATIONS.includes(s.seconds)) p.settings.seconds = s.seconds;
         if (typeof s.style === "string") p.settings.style = s.style;
+        if (s.engine === "flow" || s.engine === "local" || s.engine === "claude") p.settings.engine = s.engine;
       }
     }),
   );
@@ -107,16 +107,33 @@ app.delete("/api/projects/:id/references/:refId", (req, res) => {
   );
 });
 
-// ---- Claude breakdown ----
+// ---- storyboard: Google Flow's agent (free, in your Flow account) or Quick split (no AI, on this computer) ----
 app.post("/api/projects/:id/breakdown", (req, res) => {
   const id = safeId(req.params.id);
   const project = getProject(id);
-  const job = startJob("breakdown", id, `Storyboard for "${project.name}"`, async (report) => {
-    const { result } = await breakdownScript(getProject(id), report);
+  if (!project.script.trim()) return void res.status(400).json({ error: "Paste a script or master prompt first." });
+  const engine = project.settings.engine ?? "flow";
+  if (engine === "claude") {
+    return void res.status(400).json({ error: "This project uses Claude Code: ask Claude Code in this folder to storyboard it, or paste the JSON." });
+  }
+  const label = `Storyboard for "${project.name}"`;
+  const runner = async (report: (s: string) => void) => {
+    const result = engine === "flow" ? await breakdownWithFlowAgent(getProject(id), report) : quickSplit(getProject(id));
     updateProject(id, (p) => applyBreakdown(p, result));
     report(`Done: ${result.characters.length} characters, ${result.scenes.length} scenes.`);
-  });
-  res.json(job);
+  };
+  // Flow's agent uses the Flow window, so it waits its turn with renders; Quick split runs straight away.
+  res.json(engine === "flow" ? queueFlowJob("breakdown", id, label, runner) : startJob("breakdown", id, label, runner));
+});
+
+/**
+ * Load a ready-made storyboard (the same JSON shape the engines produce), e.g. one written by Claude Code
+ * in this repo or pasted by hand. Replaces the project's characters and scenes.
+ */
+app.post("/api/projects/:id/storyboard", (req, res) => {
+  const body = req.body ?? {};
+  const breakdown = parseBreakdown(typeof body.json === "string" ? body.json : JSON.stringify(body));
+  res.json(updateProject(safeId(req.params.id), (p) => applyBreakdown(p, breakdown)));
 });
 
 // ---- characters & scenes ----
@@ -254,6 +271,23 @@ app.post("/api/projects/:id/render", (req, res) => {
   res.json(jobs);
 });
 
+// ---- Final Cut ----
+app.get("/api/projects/:id/final-cut", async (req, res) => res.json(await syncFinalCut(safeId(req.params.id))));
+app.put("/api/projects/:id/final-cut", (req, res) => res.json(saveFinalCut(safeId(req.params.id), req.body ?? {})));
+app.post("/api/projects/:id/final-cut/reset", async (req, res) => res.json(await resetFinalCut(safeId(req.params.id))));
+app.post("/api/projects/:id/export", (req, res) => {
+  const id = safeId(req.params.id);
+  const resolution = EXPORT_RESOLUTIONS.includes(req.body?.resolution) ? (req.body.resolution as ExportResolution) : "1080p";
+  const label = `Export ${resolution === "4k" ? "4K" : resolution} MP4`;
+  const runner = async (report: (s: string) => void) => void (await exportFinalCut(id, resolution, report));
+  // 1080p and 4K fetch Flow's upscales, so they wait their turn with other Flow work; 720p doesn't need Flow.
+  res.json(resolution === "720p" ? startJob("export", id, label, runner) : queueFlowJob("export", id, label, runner));
+});
+app.delete("/api/projects/:id/exports/:file", (req, res) => {
+  deleteExport(safeId(req.params.id), req.params.file);
+  res.json(getProject(safeId(req.params.id)));
+});
+
 // ---- jobs ----
 app.get("/api/jobs", (req, res) => res.json(listJobs(req.query.projectId as string | undefined)));
 app.post("/api/jobs/:jobId/cancel", (req, res) => res.json(cancelJob(req.params.jobId) ?? null));
@@ -266,11 +300,13 @@ app.post("/api/flow/window", async (req, res) => {
   res.json(await flowStatus());
 });
 
-// ---- files: references and renders ----
+// ---- files: references, renders and exports (?download=1 saves instead of playing) ----
 app.get("/files/:projectId/:folder/:file", (req, res) => {
   const { folder, file } = req.params;
-  if (!["refs", "renders"].includes(folder) || !/^[\w.-]+$/.test(file)) return void res.sendStatus(404);
-  res.sendFile(path.join(PROJECTS_DIR, safeId(req.params.projectId), folder, file));
+  if (!["refs", "renders", "exports"].includes(folder) || !/^[\w.-]+$/.test(file)) return void res.sendStatus(404);
+  const full = path.join(PROJECTS_DIR, safeId(req.params.projectId), folder, file);
+  if (req.query.download) res.download(full, file);
+  else res.sendFile(full);
 });
 
 // ---- production: serve the built UI ----
@@ -286,6 +322,7 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 resetInterruptedRenders();
+cleanSettingsFile();
 app.listen(PORT, "127.0.0.1", () => {
   console.log(`Flow Studio PH API on http://127.0.0.1:${PORT}`);
 });

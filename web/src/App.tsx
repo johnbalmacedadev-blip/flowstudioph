@@ -2,17 +2,19 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { AppSettings, FlowStatus, Job, Project, ProjectSummary } from "../../shared/types";
 import { api } from "./api";
 import { CharactersTab } from "./components/CharactersTab";
+import { FinalCutTab } from "./components/FinalCutTab";
 import { JobsPanel } from "./components/JobsPanel";
 import { ProjectList } from "./components/ProjectList";
 import { ScriptTab } from "./components/ScriptTab";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { StoryboardTab } from "./components/StoryboardTab";
 
-type Tab = "script" | "characters" | "storyboard";
+type Tab = "script" | "characters" | "storyboard" | "finalcut";
 const TABS: { id: Tab; label: string }[] = [
   { id: "script", label: "1 · Script & references" },
   { id: "characters", label: "2 · Characters" },
   { id: "storyboard", label: "3 · Storyboard" },
+  { id: "finalcut", label: "4 · Final Cut" },
 ];
 
 export default function App() {
@@ -44,19 +46,29 @@ export default function App() {
     return () => clearInterval(t);
   }, []);
 
-  // Jobs: poll, and reload the project whenever any of its jobs changes state.
+  // Jobs: poll, and reload the project whenever any of its jobs changes state, or when it was changed
+  // from outside the page (e.g. a storyboard loaded by Claude Code).
+  const seenUpdate = useRef("");
   useEffect(() => {
     if (!project) return;
     const id = project.id;
+    seenUpdate.current = project.updatedAt;
     const tick = async () => {
-      const list = await api.jobs(id).catch(() => null);
+      const [list, summaries] = await Promise.all([api.jobs(id).catch(() => null), api.projects().catch(() => null)]);
       if (!list) return;
       setJobs(list);
       const snap = list.map((j) => `${j.id}:${j.status}:${j.progress}`).join("|");
       const active = list.some((j) => j.status === "running" || j.status === "queued");
-      if (snap !== jobSnapshot.current || active) {
+      const updatedAt = summaries?.find((s) => s.id === id)?.updatedAt ?? "";
+      const changedElsewhere = updatedAt && updatedAt !== seenUpdate.current;
+      if (summaries) setProjects(summaries);
+      if (snap !== jobSnapshot.current || active || changedElsewhere) {
         jobSnapshot.current = snap;
-        api.project(id).then((p) => setProject((cur) => (cur?.id === id ? p : cur)));
+        seenUpdate.current = updatedAt;
+        api.project(id).then((p) => {
+          seenUpdate.current = p.updatedAt;
+          setProject((cur) => (cur?.id === id ? p : cur));
+        });
       }
     };
     tick();
@@ -117,9 +129,7 @@ export default function App() {
         <div className="topbar-right">
           <FlowPill flow={flow} connecting={connecting} onConnect={connect}
             onToggleWindow={() => flow && api.flowWindow(!flow.windowVisible).then(setFlow).catch((e) => setError(e.message))} />
-          <button className={`btn ghost ${settings && !settings.hasApiKey ? "attention" : ""}`} onClick={() => setShowSettings(true)}>
-            {settings?.hasApiKey ? "Settings" : "Add Claude API key"}
-          </button>
+          <button className="btn ghost" onClick={() => setShowSettings(true)}>Settings</button>
         </div>
       </header>
 
@@ -134,7 +144,7 @@ export default function App() {
 
         <main className="main">
           {!project ? (
-            <Welcome onCreate={create} hasKey={!!settings?.hasApiKey} onSettings={() => setShowSettings(true)} />
+            <Welcome onCreate={create} connected={!!flow?.signedIn} />
           ) : (
             <>
               <nav className="tabs">
@@ -143,15 +153,19 @@ export default function App() {
                     {t.label}
                     {t.id === "characters" && project.characters.length > 0 && <span className="count">{project.characters.length}</span>}
                     {t.id === "storyboard" && project.scenes.length > 0 && <span className="count">{project.scenes.length}</span>}
+                    {t.id === "finalcut" && project.scenes.some((s) => s.videoFile) && (
+                      <span className="count">{project.scenes.filter((s) => s.videoFile).length}</span>
+                    )}
                   </button>
                 ))}
               </nav>
               {tab === "script" && (
-                <ScriptTab project={project} jobs={jobs} settings={settings} onChange={update} onError={setError}
+                <ScriptTab project={project} jobs={jobs} flow={flow} onChange={update} onError={setError}
                   onDone={() => setTab("storyboard")} />
               )}
               {tab === "characters" && <CharactersTab project={project} flow={flow} onChange={update} onError={setError} />}
               {tab === "storyboard" && <StoryboardTab project={project} flow={flow} onChange={update} onError={setError} />}
+              {tab === "finalcut" && <FinalCutTab project={project} jobs={jobs} onChange={update} onError={setError} />}
             </>
           )}
         </main>
@@ -193,20 +207,21 @@ function FlowPill({ flow, connecting, onConnect, onToggleWindow }: {
   );
 }
 
-function Welcome({ onCreate, hasKey, onSettings }: { onCreate: () => void; hasKey: boolean; onSettings: () => void }) {
+function Welcome({ onCreate, connected }: { onCreate: () => void; connected: boolean }) {
   return (
     <div className="welcome">
       <h1>From script to storyboard to screen.</h1>
       <p>
-        Paste a script, a workflow or a long master prompt, add your reference images, and Claude breaks it into
-        characters and timed scenes. Then render every frame and clip in your own Google Flow account.
+        Paste a script, a workflow or a long master prompt, add your reference images, and Google Flow's own AI breaks
+        it into characters and timed scenes. Then render every frame and clip, and cut the film, all in your own Flow
+        account. No API keys, nothing extra to pay.
       </p>
       <ol className="steps">
-        <li className={hasKey ? "done" : ""}>
-          Add your Claude API key {!hasKey && <button className="link" onClick={onSettings}>Open settings</button>}
+        <li className={connected ? "done" : ""}>
+          Click <b>Connect Google Flow</b> (top right) and sign in once in the Chrome window that opens.
         </li>
-        <li>Click <b>Connect Google Flow</b> (top right) and sign in once in the Chrome window that opens.</li>
         <li>Create a project and paste your script.</li>
+        <li>Generate the storyboard, render, then export from Final Cut.</li>
       </ol>
       <button className="btn primary big" onClick={onCreate}>+ New project</button>
     </div>

@@ -1,6 +1,6 @@
 // Types shared by the server and the web UI.
 
-/** Clip lengths Flow offers. "auto" lets Claude pick per scene from this list. */
+/** Clip lengths Flow offers. "auto" lets the storyboard pick per scene from this list. */
 export const DURATIONS = [4, 6, 8, 10] as const;
 export type Duration = (typeof DURATIONS)[number];
 export type SecondsSetting = Duration | "auto";
@@ -11,7 +11,7 @@ export type ReferenceKind = "character" | "location" | "style" | "prop";
 
 export interface Reference {
   id: string;
-  /** What the user calls it, e.g. "Maria" or "Old market". Claude matches on this. */
+  /** What the user calls it, e.g. "Maria" or "Old market". The storyboard matches on this. */
   label: string;
   kind: ReferenceKind;
   file: string; // file name inside the project's refs folder
@@ -55,13 +55,56 @@ export interface Scene {
   imageFile?: string;
   videoStatus: RenderStatus;
   videoFile?: string;
+  /** Flow's id for the clip, so its 1080p upscale can be fetched later. */
+  videoFlowId?: string;
+  /** Flow's 1080p upscale of videoFile, fetched the first time a 1080p+ export needs it. */
+  videoHdFile?: string;
   error?: string;
 }
+
+/** One clip on the Final Cut timeline: a scene's rendered clip, trimmed to [inSec, outSec]. */
+export interface CutItem {
+  id: string;
+  sceneId: string;
+  /** The scene's clip when it was added; a re-render replaces it and resets the trim. */
+  file: string;
+  duration: number;
+  inSec: number;
+  outSec: number;
+}
+
+export interface FinalCut {
+  items: CutItem[];
+  /** Taken off the timeline; kept so they can be put back. */
+  removed: CutItem[];
+}
+
+export const EXPORT_RESOLUTIONS = ["720p", "1080p", "4k"] as const;
+export type ExportResolution = (typeof EXPORT_RESOLUTIONS)[number];
+
+export interface ExportFile {
+  file: string;
+  resolution: ExportResolution;
+  width: number;
+  height: number;
+  duration: number;
+  sizeBytes: number;
+  createdAt: string;
+}
+
+/**
+ * How the script becomes a storyboard. None needs an API key:
+ * "flow" asks Google Flow's own agent (Gemini) in your signed-in account; "local" is a quick split on this computer;
+ * "claude" is written by Claude Code in this repo (the storyboard skill) and loaded through the import endpoint.
+ */
+export type StoryboardEngine = "flow" | "local" | "claude";
 
 export interface ProjectSettings {
   aspectRatio: AspectRatio;
   seconds: SecondsSetting;
   style: string;
+  /** Missing on older projects: treated as "flow". */
+  engine?: StoryboardEngine;
 }
 
 export interface Project {
@@ -78,6 +121,8 @@ export interface Project {
   scenes: Scene[];
   /** The Flow project this one renders into; created on the first render. */
   flowProjectUrl?: string;
+  finalCut?: FinalCut;
+  exports?: ExportFile[];
 }
 
 export interface ProjectSummary {
@@ -89,15 +134,11 @@ export interface ProjectSummary {
 }
 
 export interface AppSettings {
-  hasApiKey: boolean;
-  apiKeyHint: string; // last 4 characters, never the key itself
-  model: string;
-  effort: "low" | "medium" | "high" | "xhigh" | "max";
   /** A render is skipped if Flow quotes more credits than this. */
   maxCreditsPerClip: number;
 }
 
-export type JobKind = "breakdown" | "portrait" | "image" | "video";
+export type JobKind = "breakdown" | "portrait" | "image" | "video" | "export";
 
 export interface Job {
   id: string;
