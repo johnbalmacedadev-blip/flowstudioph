@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Locator, Page } from "playwright-core";
-import { chosenRefKeys, exactKeys, MAX_REFS, pinFrameKey, pinRefKeys, sceneProducts } from "../../shared/attachments.js";
+import { chosenRefKeys, exactKeys, MAX_REFS, pinExtraKeys, pinFrameKey, sceneProducts } from "../../shared/attachments.js";
 import type { Character, Product, Project, Scene } from "../../shared/types.js";
 import { exactFrame, lastFrame } from "../media.js";
 import { ensureDir, refsDir, rendersDir } from "../paths.js";
@@ -104,13 +104,13 @@ async function pinnedFrame(p: Project, s: Scene, report: Report, reuse = false):
   const key = pinFrameKey(p, s);
   const current = renderFile(p, s.imageFile);
   if (reuse && current && s.frameKey === key) return current;
-  const added = pinRefKeys(p, s);
+  const added = pinExtraKeys(p, s);
   let file: string;
   if (!added.length) {
     report("Using your exact image as the frame…");
     file = await makeExactFrame(p, s, exactKeys(s)[0], "start");
   } else {
-    report("Redrawing your start image with the added images…");
+    report("Adding the product and ticked images to your start image…");
     const exact = await makeExactFrame(p, s, exactKeys(s)[0], "start");
     const name = await generate(p, report, `scene-${pad(s.number)}-frame`, {
       kind: "image",
@@ -202,7 +202,7 @@ export async function renderSceneVideo(p: Project, sceneId: string, report: Repo
     if (pins[1]) end = await makeExactFrame(p, s, pins[1], "end");
     // Images added to the start (a product, say) can't go into a clip that starts from a frame, so they make
     // the frame the clip moves to: the start image with them in it.
-    else if (pinRefKeys(p, s).length) end = await pinnedFrame(p, s, report, true);
+    else if (pinExtraKeys(p, s).length) end = await pinnedFrame(p, s, report, true);
   }
   start ??= renderFile(p, s.imageFile);
   // From a start frame the product is already in the picture; without one, the scene's chosen images go in.
@@ -509,7 +509,7 @@ function productLock(products: Product[]) {
   return products
     .map(
       (x) =>
-        `Product: ${x.name}${x.visualPrompt ? `, ${x.visualPrompt}` : ""}. Show this exact product exactly as in its reference photo: same packaging shape, colours, label text and logo, unchanged, clearly visible, label facing the camera.`,
+        `Product: ${x.name}${x.visualPrompt ? `, ${x.visualPrompt}` : ""}. Show this exact product exactly as in its reference photo: same packaging shape, colours, label text and logo, unchanged, clearly visible, label facing the camera. If any text describes the product differently (a tub, jar, can, bottle or other colours), ignore that and follow the photo.`,
     )
     .join(" ");
 }
@@ -530,7 +530,19 @@ function actionLead(s: Scene) {
   return action ? `What happens in this shot: ${action.replace(/[.\s]+$/, "")}. Where the description below differs (what they do, props, cups or containers), follow this.` : "";
 }
 
+/** "<product> (a sleek tub with …)" → "<product>": a product with photos is shown by its photo, not a description. */
+function dropProductLooks(p: Project, prompt: string) {
+  let out = prompt;
+  for (const x of p.products ?? []) {
+    if (!x.referenceIds.length && !x.shotFile) continue;
+    const name = x.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    out = out.replace(new RegExp(`(${name})\\s*\\([^)]*\\)`, "gi"), "$1");
+  }
+  return out;
+}
+
 function withLocks(p: Project, prompt: string, products: Product[], s?: Scene) {
+  prompt = dropProductLooks(p, prompt);
   // Products this scene leaves out: drop the sentences that describe them (a storyboard written while they were
   // locked still mentions them) and say plainly not to show them.
   const leftOut = (p.products ?? []).filter((x) => !products.some((y) => y.id === x.id));

@@ -56,7 +56,7 @@ export function pinFrameKey(p: Project, s: Scene): string {
   const prev = previousScene(p, s);
   const file = (k: string | undefined) =>
     k === "prev-last" ? `prev-last:${prev?.videoFile ?? ""}` : k === "prev-frame" ? `prev-frame:${prev?.imageFile ?? ""}` : k ?? null;
-  const added = pinRefKeys(p, s).map(file);
+  const added = pinExtraKeys(p, s).map(file);
   // "edit-2": frames redrawn with added images now keep the start image's people as they are (older ones didn't).
   return JSON.stringify(added.length ? [file(exactKeys(s)[0]), ...added, "edit-2"] : [file(exactKeys(s)[0])]);
 }
@@ -130,13 +130,32 @@ export function chosenRefKeys(p: Project, s: Scene, forFrame: boolean): string[]
  * only products with at least one image ticked, so unticking a product's images takes it out of the shot.
  */
 export function sceneProducts(p: Project, s: Scene): Product[] {
-  // A pinned start with images added: the products among the pinned and added images.
-  const pinned = exactKeys(s).length && s.pinRefKeys?.length ? [...exactKeys(s), ...s.pinRefKeys] : undefined;
-  if (!pinned && !s.refOverride) return autoProducts(p, s);
-  const picked = new Set(pinned ?? s.refOverride);
-  return (p.products ?? []).filter(
-    (x) => picked.has(`product-shot:${x.id}`) || x.referenceIds.some((id) => picked.has(`ref:${id}`)),
-  );
+  const has = (picked: Set<string>, x: Product) =>
+    picked.has(`product-shot:${x.id}`) || x.referenceIds.some((id) => picked.has(`ref:${id}`));
+  // A pinned start: the scene's own products (locked or listed) plus any among the pinned and added images.
+  if (exactKeys(s).length) {
+    const picked = new Set([...exactKeys(s), ...(s.pinRefKeys ?? [])]);
+    const auto = autoProducts(p, s);
+    return (p.products ?? []).filter((x) => auto.includes(x) || has(picked, x));
+  }
+  if (!s.refOverride) return autoProducts(p, s);
+  const picked = new Set(s.refOverride);
+  return (p.products ?? []).filter((x) => has(picked, x));
+}
+
+/**
+ * What goes into a pinned start's redrawn frame: a photo of each of the scene's products not already among the
+ * pinned or ticked images (so Flow sees the real product, not just its name), then the ticked images.
+ */
+export function pinExtraKeys(p: Project, s: Scene): string[] {
+  const added = pinRefKeys(p, s);
+  const covered = new Set([...exactKeys(s), ...added]);
+  const available = new Set(refOptions(p, s).map((o) => o.key));
+  const missing = sceneProducts(p, s)
+    .filter((x) => !covered.has(`product-shot:${x.id}`) && !x.referenceIds.some((id) => covered.has(`ref:${id}`)))
+    .map((x) => x.referenceIds.map((id) => `ref:${id}`).find((k) => available.has(k)))
+    .filter((k): k is string => Boolean(k));
+  return [...missing, ...added].slice(0, MAX_REFS - 1);
 }
 
 function autoProducts(p: Project, s: Scene): Product[] {
