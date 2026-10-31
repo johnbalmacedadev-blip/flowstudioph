@@ -17,6 +17,13 @@ interface Seg {
   len: number;
 }
 
+/** Unsaved timelines by project, so switching tabs doesn't lose them. */
+const drafts = new Map<string, FinalCut>();
+/** Undo steps by project, kept across tab switches too. */
+const histories = new Map<string, FinalCut[]>();
+/** Pieces must be at least this long (the server holds the same limit). */
+const MIN_PIECE = 0.5;
+
 const RESOLUTIONS: { id: ExportResolution; title: string; note: string }[] = [
   { id: "720p", title: "720p", note: "Flow's originals. Fastest." },
   { id: "1080p", title: "1080p HD", note: "Flow's AI upscale of each clip. Recommended." },
@@ -30,13 +37,33 @@ export function FinalCutTab({ project, jobs, onChange, onError }: Props) {
   const [pps, setPps] = useState(48); // timeline pixels per second
   const [resolution, setResolution] = useState<ExportResolution>("1080p");
   const [watching, setWatching] = useState<string | null>(null);
-  const saveTimer = useRef<number>(undefined);
+  const [saved, setSaved] = useState(""); // the timeline as last saved, to tell if there are changes
+  const [saving, setSaving] = useState(false);
+  const [cutMode, setCutMode] = useState(false);
+  const history = useRef<FinalCut[]>([]);
+  if (!histories.has(id)) histories.set(id, []);
+  history.current = histories.get(id)!;
 
-  // Reload when a clip is rendered or re-rendered on the storyboard.
+  // Reload when a clip is rendered or re-rendered on the storyboard (unsaved edits are kept).
   const clipsKey = project.scenes.map((s) => s.videoFile ?? "").join("|");
   useEffect(() => {
-    api.finalCut(id).then(setCut).catch((e) => onError(e.message));
+    api
+      .finalCut(id)
+      .then((c) => {
+        setSaved(JSON.stringify(c));
+        setCut(drafts.get(id) ?? c);
+      })
+      .catch((e) => onError(e.message));
   }, [id, clipsKey]);
+  const dirty = Boolean(cut) && JSON.stringify(cut) !== saved;
+
+  // Closing or reloading the page with unsaved changes asks first.
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
 
   const segs: Seg[] = useMemo(() => {
     let start = 0;
@@ -49,14 +76,72 @@ export function FinalCutTab({ project, jobs, onChange, onError }: Props) {
   }, [cut, id]);
   const total = segs.reduce((t, s) => t + s.len, 0);
 
-  /** Apply an edit now and save it shortly after (several quick edits become one save). */
+  /** Apply an edit (kept as an unsaved change until you save). */
   const edit = (next: FinalCut) => {
+    if (cut) {
+      history.current.push(cut);
+      if (history.current.length > 50) history.current.shift();
+    }
+    drafts.set(id, next);
     setCut(next);
-    window.clearTimeout(saveTimer.current);
-    saveTimer.current = window.setTimeout(() => {
-      api.saveFinalCut(id, next).catch((e) => onError(e.message));
-    }, 400);
   };
+  const save = async () => {
+    if (!cut) return;
+    setSaving(true);
+    try {
+      const out = await api.saveFinalCut(id, cut);
+      drafts.delete(id);
+      setSaved(JSON.stringify(out));
+      setCut(out);
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+  const undo = () => {
+    const prev = history.current.pop();
+    if (!prev) return;
+    drafts.set(id, prev);
+    setCut(prev);
+  };
+  const discard = () => {
+    if (!confirm("Throw away your unsaved timeline changes?")) return;
+    drafts.delete(id);
+    history.current.length = 0;
+    setCut(JSON.parse(saved));
+  };
+  /** Cut one clip in two at a point in its own time (seconds into the clip file). */
+  const split = (itemId: string, at: number) => {
+    if (!cut) return;
+    const it = cut.items.find((i) => i.id === itemId);
+    if (!it) return;
+    if (at - it.inSec < MIN_PIECE || it.outSec - at < MIN_PIECE) {
+      return onError(`Too close to the clip's edge to cut there: each piece needs at least ${MIN_PIECE}s.`);
+    }
+    const at2 = Math.round(at * 100) / 100;
+    const piece: CutItem = { ...it, id: `${it.id.slice(0, 20)}-${Math.random().toString(36).slice(2, 8)}`, inSec: at2 };
+    const items = cut.items.flatMap((i) => (i.id === itemId ? [{ ...i, outSec: at2 }, piece] : [i]));
+    edit({ ...cut, items });
+    setSelected(piece.id);
+  };
+
+  // Ctrl+S saves, Ctrl+Z undoes.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const tag = (e.target as HTMLElement).tagName;
+      if (e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        if (dirty) void save();
+      } else if (e.key.toLowerCase() === "z" && tag !== "INPUT" && tag !== "TEXTAREA") {
+        e.preventDefault();
+        undo();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
   const patchItem = (itemId: string, patch: Partial<CutItem>) =>
     cut && edit({ ...cut, items: cut.items.map((i) => (i.id === itemId ? { ...i, ...patch } : i)) });
   const move = (itemId: string, to: number) => {
@@ -87,18 +172,22 @@ export function FinalCutTab({ project, jobs, onChange, onError }: Props) {
     edit({ items, removed: cut.removed.filter((i) => i.id !== itemId) });
   };
   const reset = async () => {
-    if (!confirm("Put every rendered clip back in storyboard order, untrimmed?")) return;
-    setCut(await api.resetFinalCut(id));
+    if (!confirm("Put every rendered clip back in storyboard order, untrimmed? This also undoes your cuts and saves.")) return;
+    const out = await api.resetFinalCut(id);
+    drafts.delete(id);
+    history.current.length = 0;
+    setSaved(JSON.stringify(out));
+    setCut(out);
   };
 
   const exportJob = jobs.findLast((j) => j.kind === "export");
   const exporting = exportJob && (exportJob.status === "queued" || exportJob.status === "running");
   // e.g. a clip that couldn't be upscaled and used its original: say so where you'll see it.
   const exportNote = exportJob?.status === "done" && exportJob.progress.includes("Note:") ? exportJob.progress : "";
+  // Export what you see: unsaved changes are saved first.
   const startExport = () => {
-    window.clearTimeout(saveTimer.current);
-    const save = cut ? api.saveFinalCut(id, cut) : Promise.resolve(null);
-    save.then(() => api.exportCut(id, resolution)).catch((e) => onError(e.message));
+    const before = dirty ? save() : Promise.resolve();
+    before.then(() => api.exportCut(id, resolution)).catch((e) => onError(e.message));
   };
 
   const sceneOf = (it: CutItem) => project.scenes.find((s) => s.id === it.sceneId);
@@ -117,8 +206,18 @@ export function FinalCutTab({ project, jobs, onChange, onError }: Props) {
 
   return (
     <div className="tab-body">
+      <div className={`save-bar ${dirty ? "dirty" : ""}`}>
+        <span className="save-state">{dirty ? "● Unsaved changes" : "✓ All changes saved"}</span>
+        <span className="grow" />
+        <button className="btn small ghost" onClick={undo} disabled={!history.current.length} title="Undo the last edit (Ctrl+Z)">↶ Undo</button>
+        <button className="btn small ghost" onClick={discard} disabled={!dirty}>Discard</button>
+        <button className="btn small primary" onClick={save} disabled={!dirty || saving} title="Save the timeline (Ctrl+S)">
+          {saving ? "Saving…" : "Save changes"}
+        </button>
+      </div>
       <Player segs={segs} total={total} aspect={project.settings.aspectRatio} selected={selected} onSelect={setSelected}
-        pps={pps} setPps={setPps} sceneOf={sceneOf} projectId={id} onMove={move} />
+        pps={pps} setPps={setPps} sceneOf={sceneOf} projectId={id} onMove={move}
+        cutMode={cutMode} setCutMode={setCutMode} onSplit={split} />
 
       {sel ? (
         <section className="card inspector">
@@ -156,6 +255,7 @@ export function FinalCutTab({ project, jobs, onChange, onError }: Props) {
       ) : (
         <p className="muted small">
           Click a clip on the timeline to trim, move or delete it. Drag clips to reorder. Click the ruler to jump there.
+          To cut a clip in two, use <b>✂ Split at playhead</b> (or press S), or turn on <b>✂ Cut tool</b> and click where to cut.
         </p>
       )}
 
@@ -231,7 +331,7 @@ export function FinalCutTab({ project, jobs, onChange, onError }: Props) {
  * Plays the timeline as one film. Two <video> elements take turns: while one plays, the next clip waits,
  * already loaded and cued to its start in the other, so cuts land without a gap.
  */
-function Player({ segs, total, aspect, selected, onSelect, pps, setPps, sceneOf, projectId, onMove }: {
+function Player({ segs, total, aspect, selected, onSelect, pps, setPps, sceneOf, projectId, onMove, cutMode, setCutMode, onSplit }: {
   segs: Seg[];
   total: number;
   aspect: Project["settings"]["aspectRatio"];
@@ -242,7 +342,11 @@ function Player({ segs, total, aspect, selected, onSelect, pps, setPps, sceneOf,
   sceneOf: (it: CutItem) => Project["scenes"][number] | undefined;
   projectId: string;
   onMove: (itemId: string, to: number) => void;
+  cutMode: boolean;
+  setCutMode: (on: boolean) => void;
+  onSplit: (itemId: string, at: number) => void;
 }) {
+  const [hoverX, setHoverX] = useState<number | null>(null);
   const a = useRef<HTMLVideoElement>(null);
   const b = useRef<HTMLVideoElement>(null);
   const [slot, setSlot] = useState(0); // which element is on screen
@@ -343,14 +447,26 @@ function Player({ segs, total, aspect, selected, onSelect, pps, setPps, sceneOf,
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement).tagName;
-      if (e.code === "Space" && tag !== "INPUT" && tag !== "TEXTAREA" && tag !== "SELECT") {
+      const typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+      if (e.code === "Space" && !typing) {
         e.preventDefault();
         void toggle();
+      } else if (e.key.toLowerCase() === "s" && !typing && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        splitAtPlayhead();
+      } else if (e.key === "Escape" && cutMode) {
+        setCutMode(false);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
+
+  /** Cut the clip under the playhead there. */
+  const splitAtPlayhead = () => {
+    const s = segs.find((x) => t >= x.start && t < x.start + x.len) ?? segs[segs.length - 1];
+    if (s) onSplit(s.item.id, s.item.inSec + (t - s.start));
+  };
 
   const width = Math.max(total * pps, 200);
   const ticks = Array.from({ length: Math.floor(total) + 1 }, (_, i) => i);
@@ -366,6 +482,11 @@ function Player({ segs, total, aspect, selected, onSelect, pps, setPps, sceneOf,
         <button className="btn primary play" onClick={toggle}>{playing ? "❚❚ Pause" : "▶ Play"}</button>
         <button className="icon-btn big" title="Next clip" onClick={() => segs[idx + 1] && seek(segs[idx + 1].start)}>⏭</button>
         <span className="timecode">{fmt(t)} / {fmt(total)}</span>
+        <button className="btn small" onClick={splitAtPlayhead} title="Cut the clip under the playhead in two (S)">✂ Split at playhead</button>
+        <button className={`btn small ${cutMode ? "primary" : "ghost"}`} onClick={() => setCutMode(!cutMode)}
+          title="Scissors: click anywhere on a clip to cut it there (Esc to stop)">
+          ✂ Cut tool{cutMode ? ": on" : ""}
+        </button>
         <span className="grow" />
         <span className="muted small">Zoom</span>
         <button className="icon-btn" onClick={() => setPps(Math.max(12, pps / 1.5))}>−</button>
@@ -381,7 +502,10 @@ function Player({ segs, total, aspect, selected, onSelect, pps, setPps, sceneOf,
               </span>
             ))}
           </div>
-          <div className="track">
+          <div className={`track ${cutMode ? "cutting" : ""}`}
+            onMouseMove={(e) => cutMode && setHoverX(e.clientX - e.currentTarget.getBoundingClientRect().left)}
+            onMouseLeave={() => setHoverX(null)}>
+            {cutMode && hoverX !== null && <div className="cut-line" style={{ left: hoverX }} />}
             {segs.map((s, i) => {
               const sc = sceneOf(s.item);
               const thumb = sc?.imageFile ? fileUrl(projectId, "renders", sc.imageFile) : undefined;
@@ -390,7 +514,7 @@ function Player({ segs, total, aspect, selected, onSelect, pps, setPps, sceneOf,
                   key={s.item.id}
                   className={`clip ${selected === s.item.id ? "sel" : ""} ${i === idx ? "current" : ""} ${dragging === s.item.id ? "dragging" : ""}`}
                   style={{ width: s.len * pps, backgroundImage: thumb ? `url(${thumb})` : undefined }}
-                  draggable
+                  draggable={!cutMode}
                   onDragStart={(e) => {
                     setDragging(s.item.id);
                     e.dataTransfer.effectAllowed = "move";
@@ -403,9 +527,15 @@ function Player({ segs, total, aspect, selected, onSelect, pps, setPps, sceneOf,
                     setDragging(null);
                   }}
                   onClick={(e) => {
-                    onSelect(selected === s.item.id ? null : s.item.id);
                     const r = e.currentTarget.getBoundingClientRect();
-                    void seek(s.start + ((e.clientX - r.left) / r.width) * s.len);
+                    const into = ((e.clientX - r.left) / r.width) * s.len;
+                    if (cutMode) {
+                      onSplit(s.item.id, s.item.inSec + into);
+                      void seek(s.start + into);
+                      return;
+                    }
+                    onSelect(selected === s.item.id ? null : s.item.id);
+                    void seek(s.start + into);
                   }}
                   title={`#${sc?.number} ${sc?.title} · ${fmt(s.len)}`}
                 >

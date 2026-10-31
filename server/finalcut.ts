@@ -52,21 +52,37 @@ export async function syncFinalCut(projectId: string): Promise<FinalCut> {
   return cut;
 }
 
-/** Save an edited timeline. Only clips that are really this project's are kept; trims are clamped. */
+/**
+ * Save an edited timeline. Only clips that are really this project's are kept; trims are clamped. A new piece
+ * (from splitting a clip) is kept when it's a part of a clip already on the timeline.
+ */
 export function saveFinalCut(projectId: string, input: FinalCut): FinalCut {
   const p = getProject(projectId);
-  const all = new Map([...(p.finalCut?.items ?? []), ...(p.finalCut?.removed ?? [])].map((i) => [i.id, i]));
+  const before = [...(p.finalCut?.items ?? []), ...(p.finalCut?.removed ?? [])];
+  const all = new Map(before.map((i) => [i.id, i]));
+  const byClip = new Map(before.map((i) => [`${i.sceneId}|${i.file}`, i]));
+  const used = new Set<string>();
   const clean = (list: unknown): CutItem[] =>
     (Array.isArray(list) ? list : []).flatMap((raw: Partial<CutItem>) => {
-      const known = raw?.id ? all.get(raw.id) : undefined;
-      if (!known) return [];
+      let known = raw?.id ? all.get(raw.id) : undefined;
+      if (!known && typeof raw?.id === "string" && /^[a-z0-9-]{4,40}$/i.test(raw.id) && !used.has(raw.id)) {
+        const source = byClip.get(`${raw.sceneId}|${raw.file}`);
+        if (source) known = { ...source, id: raw.id };
+      }
+      if (!known || used.has(known.id)) return [];
+      used.add(known.id);
       const inSec = clamp(Number(raw.inSec), 0, known.duration - 0.5);
       const outSec = clamp(Number(raw.outSec), inSec + 0.5, known.duration);
       all.delete(known.id);
       return [{ ...known, inSec: round(inSec), outSec: round(outSec) }];
     });
   const cut: FinalCut = { items: clean(input.items), removed: [] };
-  cut.removed = [...clean(input.removed), ...all.values()]; // anything left out goes to Removed, never lost
+  cut.removed = clean(input.removed);
+  // Anything left out goes to Removed, never lost, unless it's a piece another clip already covers (an undone split).
+  const kept = [...cut.items, ...cut.removed];
+  const covered = (x: CutItem) =>
+    kept.some((k) => k.sceneId === x.sceneId && k.file === x.file && k.inSec <= x.inSec + 0.01 && k.outSec >= x.outSec - 0.01);
+  cut.removed.push(...[...all.values()].filter((x) => !covered(x)));
   updateProject(projectId, (x) => (x.finalCut = cut));
   return cut;
 }

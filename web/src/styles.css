@@ -405,3 +405,13 @@ input[type="range"] { padding: 0; accent-color: var(--accent); border: none; box
   border: 1px solid var(--line); background: rgba(255, 255, 255, 0.03);
 }
 .account-who { display: flex; flex-direction: column; flex: 1; min-width: 180px; }
+.save-bar {
+  position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 8px; margin-bottom: 12px; padding: 8px 12px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2);
+}
+.save-bar .save-state { font-size: 13px; font-weight: 600; color: var(--muted); }
+.save-bar.dirty { border-color: rgba(255, 179, 71, 0.5); }
+.save-bar.dirty .save-state { color: var(--accent-2); }
+.track { position: relative; }
+.track.cutting .clip { cursor: crosshair; }
+.cut-line { position: absolute; top: -4px; bottom: -4px; width: 2px; margin-left: -1px; background: #fff; z-index: 3; pointer-events: none; box-shadow: 0 0 4px #000; }

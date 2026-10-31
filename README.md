@@ -57,7 +57,9 @@ Your script ──> Flow Studio PH ──> Chrome (signed in to Flow) ──> Fl
    all clips does). A cut starts from its own frame, or from the cast as references when it has none.
 6. **Final Cut.** Every rendered clip on one timeline, in story order. Play the whole film (cuts land without a
    gap), drag clips to reorder, click one to trim its start and end, delete it from the timeline (and put it back
-   from the tray), then **Export MP4**:
+   from the tray). Cut a clip in two with **✂ Split at playhead** (S) or the **✂ Cut tool** (click where to cut).
+   Edits stay unsaved until **Save changes** (Ctrl+S); **Undo** (Ctrl+Z) and **Discard** are there too, and
+   exporting saves first. Then **Export MP4**:
    - **720p**: Flow's originals, joined. Fastest.
    - **1080p HD**: Flow's own AI 1080p upscale of each clip (about a minute per clip the first time, then reused).
    - **4K**: enlarged from Flow's 1080p. Flow's native 4K needs a higher Google plan.
