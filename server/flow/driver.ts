@@ -114,7 +114,7 @@ async function pinnedFrame(p: Project, s: Scene, report: Report, reuse = false):
     const exact = await makeExactFrame(p, s, exactKeys(s)[0], "start");
     const name = await generate(p, report, `scene-${pad(s.number)}-frame`, {
       kind: "image",
-      prompt: `${PIN_FRAME} ${withLocks(p, s.imagePrompt || s.action, sceneProducts(p, s))} ${NO_TEXT}`,
+      prompt: `${PIN_FRAME} ${withLocks(p, s.imagePrompt || s.action, sceneProducts(p, s), s)} ${NO_TEXT}`,
       aspect: p.settings.aspectRatio,
       attachments: [upload(exact), ...(await sceneAttachments(p, s, added))].slice(0, MAX_REFS),
     });
@@ -143,7 +143,7 @@ async function bridgeFrame(p: Project, s: Scene, last: string, report: Report) {
   }
   const file = await generate(p, report, `scene-${pad(s.number)}-frame`, {
     kind: "image",
-    prompt: `${CONTINUE_FRAME} ${withLocks(p, s.imagePrompt || s.action, products)} ${NO_TEXT}`,
+    prompt: `${CONTINUE_FRAME} ${withLocks(p, s.imagePrompt || s.action, products, s)} ${NO_TEXT}`,
     aspect: p.settings.aspectRatio,
     attachments: [upload(last), ...refs].slice(0, MAX_REFS),
   });
@@ -167,7 +167,7 @@ export async function renderSceneImage(p: Project, sceneId: string, report: Repo
   const base = keys.includes("prev-frame") ? `${CONTINUE_FRAME} ${s.imagePrompt || s.action}` : s.imagePrompt || s.action;
   return generate(p, report, `scene-${pad(s.number)}-frame`, {
     kind: "image",
-    prompt: `${withLocks(p, base, products)} ${NO_TEXT}`,
+    prompt: `${withLocks(p, base, products, s)} ${NO_TEXT}`,
     aspect: p.settings.aspectRatio,
     attachments: await sceneAttachments(p, s, keys),
   });
@@ -210,8 +210,8 @@ export async function renderSceneVideo(p: Project, sceneId: string, report: Repo
   const { file, src } = await generateMedia(p, report, `scene-${pad(s.number)}-clip`, {
     kind: "video",
     prompt: pins.length
-      ? `${end ? EXACT_START_END : EXACT_START} ${withLocks(p, clipPrompt(s), products)}`
-      : withLocks(p, clipPrompt(s), products),
+      ? `${end ? EXACT_START_END : EXACT_START} ${withLocks(p, clipPrompt(s), products, s)}`
+      : withLocks(p, clipPrompt(s), products, s),
     aspect: p.settings.aspectRatio,
     durationSec: s.durationSec,
     videoMode: start ? "frames" : "ingredients",
@@ -520,7 +520,16 @@ const UGC_LOOK =
 /** Stills are frames of a clip: spoken lines in the prompt must not turn into burned-in subtitles. */
 const NO_TEXT = "A still frame: no subtitles, captions or on-screen text (only text printed on real objects, like the product label).";
 
-function withLocks(p: Project, prompt: string, products: Product[]) {
+const LOOK_RULE =
+  "Every person looks exactly like their reference image: same face, hair, hairstyle and clothes. If the text describes their hair or clothes differently, follow the image.";
+
+/** The scene's Action, first: it's what you last wrote, so it wins over an older, longer description. */
+function actionLead(s: Scene) {
+  const action = s.action.trim().replace(/\s+/g, " ");
+  return action ? `What happens in this shot: ${action.replace(/[.\s]+$/, "")}. Where the description below differs (what they do, props, cups or containers), follow this.` : "";
+}
+
+function withLocks(p: Project, prompt: string, products: Product[], s?: Scene) {
   // Products this scene leaves out: drop the sentences that describe them (a storyboard written while they were
   // locked still mentions them) and say plainly not to show them.
   const leftOut = (p.products ?? []).filter((x) => !products.some((y) => y.id === x.id));
@@ -530,7 +539,8 @@ function withLocks(p: Project, prompt: string, products: Product[]) {
     : products.length
       ? `Do not show ${names.join(" or ")}.`
       : `Do not show ${names.join(", ")} or any other product, packaging, jar, box, sachet or brand label.`;
-  return [removeProductMentions(prompt, names), productLock(products), keepOut, p.settings.videoStyle === "ugc" ? UGC_LOOK : ""]
+  const people = s && s.characterIds.length ? LOOK_RULE : "";
+  return [s ? actionLead(s) : "", removeProductMentions(prompt, names), people, productLock(products), keepOut, p.settings.videoStyle === "ugc" ? UGC_LOOK : ""]
     .filter(Boolean)
     .join(" ");
 }
