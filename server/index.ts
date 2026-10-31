@@ -10,7 +10,7 @@ import { MAX_REFS } from "../shared/attachments.js";
 import { lastFrame } from "./media.js";
 import { deleteExport, exportFinalCut, resetFinalCut, saveFinalCut, syncFinalCut } from "./finalcut.js";
 import { breakdownWithFlowAgent } from "./flow/agent.js";
-import { connectFlow, flowStatus, setWindowVisible } from "./flow/browser.js";
+import { connectFlow, flowStatus, setWindowVisible, switchFlowAccount } from "./flow/browser.js";
 import { readCredits, renderPortrait, renderProductShot, renderSceneImage, renderSceneVideo } from "./flow/driver.js";
 import { cancelJob, listJobs, queueFlowJob, setAfterFlowJob, startJob, whenFlowIdle } from "./jobs.js";
 import { PROJECTS_DIR, ensureDir, refsDir, safeId } from "./paths.js";
@@ -363,17 +363,22 @@ app.post("/api/jobs/:jobId/cancel", (req, res) => res.json(cancelJob(req.params.
 
 // ---- Google Flow connection ----
 // Remaining credits: read when Flow is free (after each Flow job, on connect, or when asked) and kept here.
-const credits: { value?: number; resets?: string; at?: string } = {};
+const credits: { value?: number; resets?: string; at?: string; email?: string } = {};
 async function refreshCredits() {
   const read = await readCredits().catch(() => undefined);
-  if (read?.credits !== undefined) Object.assign(credits, { value: read.credits, resets: read.resets, at: new Date().toISOString() });
+  if (read?.credits !== undefined) {
+    const email = (await flowStatus()).account?.email;
+    Object.assign(credits, { value: read.credits, resets: read.resets, at: new Date().toISOString(), email });
+  }
 }
 setAfterFlowJob(refreshCredits);
 const withCredits = <T extends object>(s: T) => ({ ...s, credits: credits.value, creditsResets: credits.resets, creditsAt: credits.at });
 
 app.get("/api/flow/status", async (_req, res) => {
   const status = await flowStatus();
-  // First time Flow is signed in, read the credits (once Flow is free).
+  // First time Flow is signed in, or after switching accounts, read the credits (once Flow is free).
+  const switched = status.account && credits.email && status.account.email !== credits.email;
+  if (switched) Object.assign(credits, { value: undefined, resets: undefined, at: undefined, email: undefined });
   if (status.signedIn && !credits.at) {
     credits.at = new Date(0).toISOString();
     void whenFlowIdle(refreshCredits);
@@ -381,6 +386,7 @@ app.get("/api/flow/status", async (_req, res) => {
   res.json(withCredits(status));
 });
 app.post("/api/flow/connect", async (_req, res) => res.json(withCredits(await connectFlow())));
+app.post("/api/flow/account", async (_req, res) => res.json(withCredits(await whenFlowIdle(switchFlowAccount))));
 app.post("/api/flow/credits", async (_req, res) => {
   await whenFlowIdle(refreshCredits);
   res.json(withCredits(await flowStatus()));

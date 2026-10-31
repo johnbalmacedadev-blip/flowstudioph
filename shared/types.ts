@@ -168,6 +168,10 @@ export interface Project {
   scenes: Scene[];
   /** The Flow project this one renders into; created on the first render. */
   flowProjectUrl?: string;
+  /** The Google account (email) flowProjectUrl belongs to; another account gets its own Flow project. */
+  flowAccount?: string;
+  /** Flow projects made under other accounts, by email, to go back to if you switch back. */
+  flowProjects?: Record<string, string>;
   finalCut?: FinalCut;
   exports?: ExportFile[];
 }
@@ -207,6 +211,8 @@ export interface FlowStatus {
   windowVisible: boolean;
   url: string;
   message: string;
+  /** The Google account Flow is signed in with. */
+  account?: { name: string; email: string };
   /** Google Flow credits left, as Flow's account menu last showed them. */
   credits?: number;
   /** Flow's own note on when the credits reset ("Resets Nov 18 at 2:19 PM"). */

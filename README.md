@@ -106,6 +106,12 @@ Open **http://localhost:5173**, then:
 
 ## Settings
 
+- **Google Flow account** shows who Flow is signed in as. **Use a different Google account** opens the Flow
+  window on Google's account chooser: pick an account or sign in to another one there yourself (the app never
+  sees passwords). Each project then gets its own Flow project under that account, and goes back to its old one
+  if you switch back. The top bar shows that account's remaining credits.
+- **Credit limit per render**: renders Flow quotes above this are skipped.
+
 | Environment variable | Default | |
 |---|---|---|
 | `FSPH_API_PORT` | `5174` | API server port (the UI is on 5173) |

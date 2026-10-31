@@ -1,14 +1,31 @@
 import { useState } from "react";
-import type { AppSettings } from "../../../shared/types";
+import type { AppSettings, FlowStatus } from "../../../shared/types";
 import { api } from "../api";
 
-export function SettingsDialog({ settings, onClose, onSaved }: {
+export function SettingsDialog({ settings, flow, onClose, onSaved, onSwitchAccount }: {
   settings: AppSettings;
+  flow: FlowStatus | null;
   onClose: () => void;
   onSaved: (s: AppSettings) => void;
+  onSwitchAccount: () => Promise<void>;
 }) {
   const [cap, setCap] = useState(settings.maxCreditsPerClip);
   const [saving, setSaving] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  const [switchError, setSwitchError] = useState("");
+  const account = flow?.signedIn ? flow.account : undefined;
+
+  const switchAccount = async () => {
+    setSwitching(true);
+    setSwitchError("");
+    try {
+      await onSwitchAccount();
+    } catch (e) {
+      setSwitchError((e as Error).message);
+    } finally {
+      setSwitching(false);
+    }
+  };
 
   const save = async () => {
     setSaving(true);
@@ -29,6 +46,32 @@ export function SettingsDialog({ settings, onClose, onSaved }: {
           Flow Studio PH needs no API keys. Storyboards and renders both run in your own Google Flow account, in the
           Flow window the app keeps signed in, so the only cost is your Flow credits.
         </p>
+
+        <div className="field">
+          <span>Google Flow account</span>
+          <div className="account-row">
+            <div className="account-who">
+              {account ? (
+                <>
+                  <b>{account.name}</b>
+                  <span className="muted small">{account.email}</span>
+                </>
+              ) : (
+                <span className="muted small">{flow?.browserOpen ? flow.message : "Google Flow isn't connected."}</span>
+              )}
+            </div>
+            <button className="btn small" onClick={switchAccount} disabled={switching || !flow?.browserOpen}>
+              {switching ? "Opening…" : "Use a different Google account"}
+            </button>
+          </div>
+          <small className="muted">
+            Opens the Flow window on Google's account chooser: pick another account or <b>Use another account</b> to
+            sign in (you type your password in Google's page; the app never sees it). The window hides once Flow is
+            back. Each project then gets its own Flow project under that account, and credits are that account's.
+            Waits for any render to finish first.
+          </small>
+          {switchError && <small className="error-text">{switchError}</small>}
+        </div>
 
         <label className="field">
           <span>Google Flow credit limit per render</span>

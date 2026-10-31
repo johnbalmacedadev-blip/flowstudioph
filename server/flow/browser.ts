@@ -124,6 +124,27 @@ async function signInState(page: Page): Promise<SignIn> {
   return "loading";
 }
 
+/** The signed-in Google account, from Flow's profile button ("Google Account: Name (email)…"). */
+export async function flowAccount(page: Page): Promise<{ name: string; email: string } | undefined> {
+  const label = await page.locator('[aria-label^="Google Account:"]').first().getAttribute("aria-label", { timeout: 2_000 }).catch(() => null);
+  const m = label && /Google Account:\s*(.*?)\s*\(([^)\s]+@[^)\s]+)\)/s.exec(label);
+  return m ? { name: m[1].trim(), email: m[2].toLowerCase() } : undefined;
+}
+
+/**
+ * Use another Google account: shows the Flow window on Google's account chooser, where you pick an account
+ * or sign in to a new one yourself. Once Flow is back and signed in, the window hides again.
+ */
+export async function switchFlowAccount(): Promise<FlowStatus> {
+  const page = await getFlowPage();
+  await setWindowVisible(true);
+  shownForSignIn = true;
+  await page.goto("https://accounts.google.com/AccountChooser?continue=https%3A%2F%2Fflow.google.com%2F%3Fhl%3Den", {
+    waitUntil: "domcontentloaded",
+  });
+  return flowStatus();
+}
+
 export async function flowStatus(): Promise<FlowStatus> {
   const off = { browserOpen: false, signedIn: false, windowVisible: false, url: "" };
   if (!(await cdpAlive())) return { ...off, message: "Google Flow isn't connected. Click Connect Google Flow." };
@@ -137,7 +158,8 @@ export async function flowStatus(): Promise<FlowStatus> {
         : state === "loading"
           ? "Loading Google Flow…"
           : "Sign in to Google in the Flow window that just opened.";
-    return { browserOpen: true, signedIn: state === "signed-in", windowVisible, url: page.url(), message };
+    const account = state === "signed-in" ? await flowAccount(page) : undefined;
+    return { browserOpen: true, signedIn: state === "signed-in", windowVisible, url: page.url(), message, account };
   } catch (e) {
     return { ...off, browserOpen: true, message: (e as Error).message };
   }

@@ -86,6 +86,8 @@ export const api = {
   cancelJob: (jobId: string) => call<Job | null>("POST", `/api/jobs/${jobId}/cancel`),
 
   flowStatus: () => call<FlowStatus>("GET", "/api/flow/status"),
+  /** Open Google's account chooser in the Flow window to use another account (waits until Flow is free). */
+  switchFlowAccount: () => call<FlowStatus>("POST", "/api/flow/account"),
   /** Read the remaining credits from Flow again (waits until Flow is free). */
   refreshCredits: () => call<FlowStatus>("POST", "/api/flow/credits"),
   connectFlow: () => call<FlowStatus>("POST", "/api/flow/connect"),

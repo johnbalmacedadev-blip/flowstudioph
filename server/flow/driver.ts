@@ -8,7 +8,7 @@ import { ensureDir, refsDir, rendersDir } from "../paths.js";
 import { readSettings } from "../settings.js";
 import { getProject, updateProject } from "../store.js";
 import { removeProductMentions } from "../storyboard.js";
-import { getBrowser, getFlowPage } from "./browser.js";
+import { flowAccount, getBrowser, getFlowPage } from "./browser.js";
 
 type Report = (progress: string) => void;
 
@@ -677,11 +677,34 @@ async function clearAttachments(page: Page) {
   }
 }
 
-/** Each app project gets its own Flow project, created on first use and remembered. */
+/**
+ * Each app project gets its own Flow project, created on first use and remembered, one per Google account:
+ * after switching accounts a project gets a new Flow project (and its old one back if you switch back).
+ */
 export async function openProject(page: Page, p: Project) {
-  const saved = getProject(p.id).flowProjectUrl;
+  const email = (await flowAccount(page))?.email;
+  const stored = getProject(p.id);
+  let saved = stored.flowProjectUrl;
+  if (saved && email && stored.flowAccount && stored.flowAccount !== email) {
+    // Made under another account: keep it for later, use this account's own (if any).
+    const other = stored.flowAccount;
+    const mine = stored.flowProjects?.[email];
+    updateProject(p.id, (x) => {
+      x.flowProjects = { ...x.flowProjects, [other]: saved! };
+      delete x.flowProjects[email];
+      x.flowProjectUrl = mine;
+      x.flowAccount = mine ? email : undefined;
+    });
+    saved = mine;
+  }
   if (saved) {
     if (!page.url().startsWith(saved)) await page.goto(`${saved}?hl=en`, { waitUntil: "domcontentloaded" });
+    // An older project with no account noted may belong to an account you've switched away from.
+    if (!stored.flowAccount && !(await composer(page).waitFor({ timeout: 30_000 }).then(() => true, () => false))) {
+      updateProject(p.id, (x) => (x.flowProjectUrl = undefined));
+      return openProject(page, p);
+    }
+    if (email && !getProject(p.id).flowAccount) updateProject(p.id, (x) => (x.flowAccount = email));
   } else {
     await page.goto(FLOW_HOME, { waitUntil: "domcontentloaded" });
     await page.getByText("New project", { exact: true }).first().click({ timeout: 30_000 });
@@ -691,7 +714,7 @@ export async function openProject(page: Page, p: Project) {
     await title.fill(`Flow Studio PH · ${p.name}`.slice(0, 80));
     await title.press("Enter");
     const url = page.url().split("?")[0];
-    updateProject(p.id, (x) => (x.flowProjectUrl = url));
+    updateProject(p.id, (x) => Object.assign(x, { flowProjectUrl: url, flowAccount: email }));
   }
   await composer(page).waitFor({ timeout: 60_000 });
 }

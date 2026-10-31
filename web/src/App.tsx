@@ -177,7 +177,8 @@ export default function App() {
       </div>
 
       {showSettings && settings && (
-        <SettingsDialog settings={settings} onClose={() => setShowSettings(false)} onSaved={setSettings} />
+        <SettingsDialog settings={settings} flow={flow} onClose={() => setShowSettings(false)} onSaved={setSettings}
+          onSwitchAccount={() => api.switchFlowAccount().then(setFlow)} />
       )}
     </div>
   );
