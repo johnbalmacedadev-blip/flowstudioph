@@ -3,8 +3,8 @@ import path from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 import multer from "multer";
 import {
-  DURATIONS, EXPORT_RESOLUTIONS, type Character, type ExportResolution, type Product, type Project, type ReferenceKind,
-  type Scene,
+  DURATIONS, EXPORT_RESOLUTIONS, type AppSettings, type Character, type ExportResolution, type Product, type Project,
+  type ReferenceKind, type Scene,
 } from "../shared/types.js";
 import { MAX_REFS } from "../shared/attachments.js";
 import { lastFrame } from "./media.js";
@@ -13,9 +13,10 @@ import { breakdownWithFlowAgent } from "./flow/agent.js";
 import { connectFlow, flowStatus, setWindowVisible, switchFlowAccount } from "./flow/browser.js";
 import { readCredits, renderPortrait, renderProductShot, renderSceneImage, renderSceneVideo } from "./flow/driver.js";
 import { cancelJob, listJobs, queueFlowJob, setAfterFlowJob, startJob, whenFlowIdle } from "./jobs.js";
-import { PROJECTS_DIR, ensureDir, refsDir, safeId } from "./paths.js";
+import { PROJECTS_DIR, ensureDir, exportsDir, refsDir, safeId } from "./paths.js";
 import { quickSplit } from "./localsplit.js";
-import { cleanSettingsFile, readSettings, writeSettings } from "./settings.js";
+import { checkExportDir, cleanSettingsFile, readSettings, writeSettings } from "./settings.js";
+import { pickFolder, revealInExplorer } from "./folders.js";
 import { applyBreakdown, parseBreakdown } from "./storyboard.js";
 import {
   createProject, deleteProject, getProject, listProjects, newId, resetInterruptedRenders, updateProject,
@@ -32,8 +33,35 @@ const pick = <T extends object>(src: any, keys: (keyof T)[]) =>
 // ---- settings ----
 app.get("/api/settings", (_req, res) => res.json(readSettings()));
 app.put("/api/settings", (req, res) => {
-  const { maxCreditsPerClip } = req.body ?? {};
-  res.json(writeSettings(Number.isInteger(maxCreditsPerClip) && maxCreditsPerClip >= 0 ? { maxCreditsPerClip } : {}));
+  const { maxCreditsPerClip, exportDir } = req.body ?? {};
+  const patch: Partial<AppSettings> = {};
+  if (Number.isInteger(maxCreditsPerClip) && maxCreditsPerClip >= 0) patch.maxCreditsPerClip = maxCreditsPerClip;
+  if (exportDir !== undefined) {
+    try {
+      patch.exportDir = checkExportDir(exportDir);
+    } catch (e) {
+      return void res.status(400).json({ error: (e as Error).message });
+    }
+  }
+  res.json(writeSettings(patch));
+});
+// Windows' folder picker for the export folder (the browser can't give the app a folder path).
+app.post("/api/settings/pick-export-dir", async (_req, res) => {
+  try {
+    res.json({ dir: (await pickFolder(readSettings().exportDir)) ?? null });
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+app.post("/api/settings/open-export-dir", (_req, res) => {
+  try {
+    const dir = readSettings().exportDir;
+    fs.mkdirSync(dir, { recursive: true });
+    revealInExplorer(dir);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
 });
 
 // ---- projects ----
@@ -351,6 +379,19 @@ app.post("/api/projects/:id/export", (req, res) => {
   const runner = async (report: (s: string) => void) => void (await exportFinalCut(id, resolution, report));
   // 1080p and 4K fetch Flow's upscales, so they wait their turn with other Flow work; 720p doesn't need Flow.
   res.json(resolution === "720p" ? startJob("export", id, label, runner) : queueFlowJob("export", id, label, runner));
+});
+// Show an export in Explorer: the copy in your export folder if it's there, else the app's own.
+app.post("/api/projects/:id/exports/:file/reveal", (req, res) => {
+  const p = getProject(safeId(req.params.id));
+  const x = p.exports?.find((e) => e.file === req.params.file);
+  if (!x) return void res.status(404).json({ error: "Export not found" });
+  const own = path.join(exportsDir(p.id), x.file);
+  try {
+    revealInExplorer(x.savedTo && fs.existsSync(x.savedTo) ? x.savedTo : own);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
 });
 app.delete("/api/projects/:id/exports/:file", (req, res) => {
   deleteExport(safeId(req.params.id), req.params.file);

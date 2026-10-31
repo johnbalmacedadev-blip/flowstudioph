@@ -415,3 +415,4 @@ input[type="range"] { padding: 0; accent-color: var(--accent); border: none; box
 .track { position: relative; }
 .track.cutting .clip { cursor: crosshair; }
 .cut-line { position: absolute; top: -4px; bottom: -4px; width: 2px; margin-left: -1px; background: #fff; z-index: 3; pointer-events: none; box-shadow: 0 0 4px #000; }
+.export-path { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

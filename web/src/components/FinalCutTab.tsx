@@ -308,7 +308,10 @@ export function FinalCutTab({ project, jobs, onChange, onError }: Props) {
                 <span className="grow">
                   <b>{x.file}</b>
                   <span className="muted small"> · {x.width}×{x.height} · {fmt(x.duration)} · {(x.sizeBytes / 1e6).toFixed(1)} MB · {new Date(x.createdAt).toLocaleString()}</span>
+                  {x.savedTo && <span className="muted small export-path" title={x.savedTo}>Saved to {x.savedTo}</span>}
                 </span>
+                <button className="btn small ghost" onClick={() => api.revealExport(id, x.file).catch((e) => onError(e.message))}
+                  title="Show this file in File Explorer">📂 Show in folder</button>
                 <button className="btn small ghost" onClick={() => setWatching(watching === x.file ? null : x.file)}>
                   {watching === x.file ? "Close" : "Watch"}
                 </button>

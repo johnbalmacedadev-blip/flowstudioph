@@ -130,6 +130,8 @@ export interface ExportFile {
   duration: number;
   sizeBytes: number;
   createdAt: string;
+  /** The copy saved in your export folder, if it was. */
+  savedTo?: string;
 }
 
 /**
@@ -187,6 +189,8 @@ export interface ProjectSummary {
 export interface AppSettings {
   /** A render is skipped if Flow quotes more credits than this. */
   maxCreditsPerClip: number;
+  /** Where exported MP4s are saved (a copy also stays in the app for playing). */
+  exportDir: string;
 }
 
 export type JobKind = "breakdown" | "portrait" | "product" | "image" | "video" | "export";

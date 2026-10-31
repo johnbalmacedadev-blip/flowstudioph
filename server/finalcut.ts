@@ -5,6 +5,7 @@ import { upscaleClip } from "./flow/driver.js";
 import { probe, renderCut, type Segment } from "./media.js";
 import { ensureDir, exportsDir, rendersDir } from "./paths.js";
 import { getProject, newId, updateProject } from "./store.js";
+import { readSettings } from "./settings.js";
 
 type Report = (progress: string) => void;
 
@@ -132,6 +133,16 @@ export async function exportFinalCut(projectId: string, resolution: ExportResolu
   await renderCut(segments, out, width, height, (f) => report(`Exporting… ${Math.round(f * 100)}%`));
 
   const meta = await probe(out);
+  // A copy in your export folder (the app keeps its own to play here).
+  let savedTo: string | undefined;
+  try {
+    const dir = ensureDir(readSettings().exportDir);
+    savedTo = path.join(dir, name);
+    fs.copyFileSync(out, savedTo);
+  } catch (e) {
+    savedTo = undefined;
+    notes.push(`couldn't save a copy to your export folder (${(e as Error).message})`);
+  }
   const record: ExportFile = {
     file: name,
     resolution,
@@ -140,9 +151,10 @@ export async function exportFinalCut(projectId: string, resolution: ExportResolu
     duration: meta.duration,
     sizeBytes: fs.statSync(out).size,
     createdAt: new Date().toISOString(),
+    savedTo,
   };
   updateProject(projectId, (x) => (x.exports = [record, ...(x.exports ?? [])]));
-  report(notes.length ? `Done. Note: ${notes.join("; ")}.` : `Done: ${width}×${height}, ${meta.duration.toFixed(1)}s.`);
+  report(notes.length ? `Done. Note: ${notes.join("; ")}.` : `Done: ${width}×${height}, ${meta.duration.toFixed(1)}s. Saved to ${savedTo}.`);
   return record;
 }
 

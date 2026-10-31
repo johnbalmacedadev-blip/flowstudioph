@@ -10,6 +10,21 @@ export function SettingsDialog({ settings, flow, onClose, onSaved, onSwitchAccou
   onSwitchAccount: () => Promise<void>;
 }) {
   const [cap, setCap] = useState(settings.maxCreditsPerClip);
+  const [exportDir, setExportDir] = useState(settings.exportDir);
+  const [folderError, setFolderError] = useState("");
+  const [picking, setPicking] = useState(false);
+  const browse = async () => {
+    setPicking(true);
+    setFolderError("");
+    try {
+      const { dir } = await api.pickExportDir();
+      if (dir) setExportDir(dir);
+    } catch (e) {
+      setFolderError((e as Error).message);
+    } finally {
+      setPicking(false);
+    }
+  };
   const [saving, setSaving] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [switchError, setSwitchError] = useState("");
@@ -30,8 +45,10 @@ export function SettingsDialog({ settings, flow, onClose, onSaved, onSwitchAccou
   const save = async () => {
     setSaving(true);
     try {
-      onSaved(await api.saveSettings({ maxCreditsPerClip: cap }));
+      onSaved(await api.saveSettings({ maxCreditsPerClip: cap, exportDir }));
       onClose();
+    } catch (e) {
+      setFolderError((e as Error).message);
     } finally {
       setSaving(false);
     }
@@ -71,6 +88,21 @@ export function SettingsDialog({ settings, flow, onClose, onSaved, onSwitchAccou
             Waits for any render to finish first.
           </small>
           {switchError && <small className="error-text">{switchError}</small>}
+        </div>
+
+        <div className="field">
+          <span>Export folder</span>
+          <div className="row tight">
+            <input className="grow" value={exportDir} onChange={(e) => setExportDir(e.target.value)} spellCheck={false} />
+            <button className="btn small" onClick={browse} disabled={picking}>{picking ? "Choosing…" : "Browse…"}</button>
+            <button className="btn small ghost" onClick={() => api.openExportDir().catch((e) => setFolderError(e.message))}
+              title="Open the saved export folder in File Explorer">Open folder</button>
+          </div>
+          <small className="muted">
+            Every MP4 you export from the Final Cut tab is saved here, named after the project (the app keeps its own
+            copy to play). Browse opens Windows' folder picker; it may appear behind this window.
+          </small>
+          {folderError && <small className="error-text">{folderError}</small>}
         </div>
 
         <label className="field">

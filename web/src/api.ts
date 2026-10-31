@@ -20,8 +20,13 @@ const P = (id: string) => `/api/projects/${id}`;
 
 export const api = {
   settings: () => call<AppSettings>("GET", "/api/settings"),
-  saveSettings: (s: { maxCreditsPerClip?: number }) =>
+  saveSettings: (s: { maxCreditsPerClip?: number; exportDir?: string }) =>
     call<AppSettings>("PUT", "/api/settings", s),
+  /** Windows' folder picker for the export folder; null if you cancel. */
+  pickExportDir: () => call<{ dir: string | null }>("POST", "/api/settings/pick-export-dir"),
+  openExportDir: () => call<{ ok: boolean }>("POST", "/api/settings/open-export-dir"),
+  /** Show an exported file selected in Windows Explorer. */
+  revealExport: (id: string, file: string) => call<{ ok: boolean }>("POST", `${P(id)}/exports/${encodeURIComponent(file)}/reveal`),
 
   projects: () => call<ProjectSummary[]>("GET", "/api/projects"),
   createProject: (name: string) => call<Project>("POST", "/api/projects", { name }),

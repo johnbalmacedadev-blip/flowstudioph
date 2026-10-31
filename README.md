@@ -112,6 +112,8 @@ Open **http://localhost:5173**, then:
   window on Google's account chooser: pick an account or sign in to another one there yourself (the app never
   sees passwords). Each project then gets its own Flow project under that account, and goes back to its old one
   if you switch back. The top bar shows that account's remaining credits.
+- **Export folder**: where exported MP4s are saved (default: your Videos folder, `Videos\Flow Studio PH`). **Browse…** opens
+  Windows' folder picker; each export in the Final Cut tab has **📂 Show in folder**.
 - **Credit limit per render**: renders Flow quotes above this are skipped.
 
 | Environment variable | Default | |
