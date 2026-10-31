@@ -106,3 +106,17 @@ export async function renderCut(
     ff.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`Export failed: ${err.trim().split("\n").pop() || `FFmpeg exited with ${code}`}`))));
   });
 }
+
+/**
+ * A video frame made from a photo without redrawing it: the photo is scaled to fit width x height whole,
+ * and any space left (a square photo in a 9:16 frame) is filled with a blurred copy of the same photo.
+ */
+export async function exactFrame(photo: string, out: string, width: number, height: number) {
+  const filter =
+    `[0:v]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},boxblur=40:5[bg];` +
+    `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease:flags=lanczos[fg];` +
+    `[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuvj420p`;
+  await execFileAsync(FFMPEG, ["-v", "error", "-y", "-i", photo, "-filter_complex", filter, "-frames:v", "1", "-q:v", "2", out]);
+  if (!fs.existsSync(out)) throw new Error("Couldn't make the frame from that image.");
+  return out;
+}

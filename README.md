@@ -37,7 +37,12 @@ Your script ──> Flow Studio PH ──> Chrome (signed in to Flow) ──> Fl
 4. **Storyboard.** Edit, reorder, retime, add or delete scenes. Render a free **frame** per scene, then the paid
    **clip**. Character portraits are attached to every frame so people stay on-model. Frames never get
    subtitles burned in; clips speak the dialogue. A spinning gear on a render button means it's queued or
-   rendering.
+   rendering. **Images sent to Flow** on each scene shows the reference images it will attach (up to 3): the
+   app's own pick (Auto), or tick exactly the ones you want (Custom; Reset to auto undoes it). Untick all of a
+   product's images and that scene leaves the product out, even a locked one.
+   **📌 Exact** on any of those images uses it as the scene's frame exactly as it is: nothing is generated for
+   the frame (it's fitted to the video's shape, any gap filled with a blurred copy of the same photo), and the
+   clip starts on it with Flow told to keep it unchanged. Use it for packshots where the label must be exact.
 5. **Seamless scenes.** The storyboard keeps the story in one location unless the script moves it, and marks each scene
    that continues from the one before. Between scenes the storyboard shows **🔗 Seamless** or **✂ Cut**; click it
    to switch. A seamless scene's frame is matched to the previous frame, and its clip **starts on the last frame

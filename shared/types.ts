@@ -73,6 +73,16 @@ export interface Scene {
   continuesPrevious: boolean;
   /** Products shown in this scene (locked products are added to every scene anyway). */
   productIds?: string[];
+  /**
+   * Your own choice of images to send to Flow for this scene (keys from shared/attachments.ts).
+   * Missing means automatic.
+   */
+  refOverride?: string[];
+  /**
+   * An image (key from shared/attachments.ts) used as this scene's exact frame: no frame is generated, and the
+   * clip starts on it. Missing means the frame is generated as usual.
+   */
+  exactFrameKey?: string;
   imageStatus: RenderStatus;
   imageFile?: string;
   videoStatus: RenderStatus;

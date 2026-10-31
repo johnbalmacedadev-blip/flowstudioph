@@ -2,7 +2,9 @@ import { Fragment, useState } from "react";
 import { DURATIONS, type Duration, type FlowStatus, type Project, type Scene } from "../../../shared/types";
 import { api, fileUrl } from "../api";
 import { Editable } from "./Editable";
+import { sceneProducts } from "../../../shared/attachments";
 import { isBusy, RenderLabel } from "./Busy";
+import { SceneRefs } from "./SceneRefs";
 import { StatusBadge } from "./StatusBadge";
 
 interface Props {
@@ -94,6 +96,13 @@ export function StoryboardTab({ project, flow, onChange, onError }: Props) {
             open={expanded.has(s.id)}
             onToggle={() => toggle(s.id)}
             onPatch={(patch) => run(api.updateScene(id, s.id, patch))}
+            onRefs={(keys) => run(api.setSceneRefs(id, s.id, keys))}
+            onExact={(key) =>
+              // Pinning applies the exact frame straight away (it's made on this computer, nothing generated).
+              api.setSceneExact(id, s.id, key)
+                .then((p) => { onChange(p); if (key) return api.render(id, "image", [s.id]); })
+                .catch((e) => onError(e.message))
+            }
             onMove={(d) => run(api.moveScene(id, s.id, d))}
             onAddAfter={() => run(api.addScene(id, s.id))}
             onDelete={() => confirm(`Delete scene ${s.number}?`) && run(api.deleteScene(id, s.id))}
@@ -106,7 +115,7 @@ export function StoryboardTab({ project, flow, onChange, onError }: Props) {
   );
 }
 
-function SceneCard({ project, scene: s, first, last, open, onToggle, onPatch, onMove, onAddAfter, onDelete, onRender }: {
+function SceneCard({ project, scene: s, first, last, open, onToggle, onPatch, onRefs, onExact, onMove, onAddAfter, onDelete, onRender }: {
   project: Project;
   scene: Scene;
   first: boolean;
@@ -114,6 +123,8 @@ function SceneCard({ project, scene: s, first, last, open, onToggle, onPatch, on
   open: boolean;
   onToggle: () => void;
   onPatch: (patch: Partial<Scene>) => void;
+  onRefs: (keys: string[] | null) => void;
+  onExact: (key: string | null) => void;
   onMove: (d: "up" | "down") => void;
   onAddAfter: () => void;
   onDelete: () => void;
@@ -122,7 +133,7 @@ function SceneCard({ project, scene: s, first, last, open, onToggle, onPatch, on
   const id = project.id;
   const cast = project.characters.filter((c) => s.characterIds.includes(c.id));
   const products = project.products ?? [];
-  const shown = products.filter((x) => x.locked || s.productIds?.includes(x.id));
+  const shown = sceneProducts(project, s);
   const vertical = project.settings.aspectRatio === "9:16";
 
   return (
@@ -162,6 +173,8 @@ function SceneCard({ project, scene: s, first, last, open, onToggle, onPatch, on
 
         <p className="action">{s.action}</p>
         {s.dialogue && <p className="dialogue">{s.dialogue}</p>}
+
+        <SceneRefs project={project} scene={s} onChange={onRefs} onExact={onExact} />
 
         {open && (
           <div className="prompts">

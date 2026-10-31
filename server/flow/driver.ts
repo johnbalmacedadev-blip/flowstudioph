@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Page } from "playwright-core";
+import type { Locator, Page } from "playwright-core";
+import { chosenRefKeys, MAX_REFS, sceneProducts } from "../../shared/attachments.js";
 import type { Character, Product, Project, Scene } from "../../shared/types.js";
-import { lastFrame } from "../media.js";
+import { exactFrame, lastFrame } from "../media.js";
 import { ensureDir, refsDir, rendersDir } from "../paths.js";
 import { readSettings } from "../settings.js";
 import { getProject, updateProject } from "../store.js";
@@ -13,7 +14,6 @@ type Report = (progress: string) => void;
 const FLOW_HOME = "https://flow.google.com/?hl=en";
 const IMAGE_TIMEOUT_MS = 4 * 60_000;
 const VIDEO_TIMEOUT_MS = 12 * 60_000;
-const MAX_ATTACHMENTS = 3;
 
 interface Attachment {
   /** Unique name Flow shows for the upload, so it can be found again in the asset picker. */
@@ -71,16 +71,23 @@ const CONTINUE_FRAME =
 
 export async function renderSceneImage(p: Project, sceneId: string, report: Report) {
   const s = scene(p, sceneId);
-  const prevFrame = s.continuesPrevious ? renderFile(p, previous(p, s)?.imageFile) : undefined;
-  if (s.continuesPrevious && !prevFrame) report("No frame for the previous scene yet; matching the cast only.");
+  if (s.exactFrameKey) {
+    // Pinned exact image: nothing is generated, the photo itself becomes the frame.
+    report("Using your exact image as the frame…");
+    return path.basename(await makeExactFrame(p, s));
+  }
+  const keys = chosenRefKeys(p, s, true);
+  if (s.continuesPrevious && !keys.includes("prev-frame") && !s.refOverride) {
+    report("No frame for the previous scene yet; matching the cast only.");
+  }
   const products = sceneProducts(p, s);
-  const refs = [...productRefs(p, products), ...characterRefs(p, cast(p, s), true)];
-  const base = prevFrame ? `${CONTINUE_FRAME} ${s.imagePrompt || s.action}` : s.imagePrompt || s.action;
+  // The previous frame leads the references, and the prompt says to carry its set and light over.
+  const base = keys.includes("prev-frame") ? `${CONTINUE_FRAME} ${s.imagePrompt || s.action}` : s.imagePrompt || s.action;
   return generate(p, report, `scene-${pad(s.number)}-frame`, {
     kind: "image",
     prompt: `${withLocks(p, base, products)} ${NO_TEXT}`,
     aspect: p.settings.aspectRatio,
-    attachments: (prevFrame ? [upload(prevFrame), ...refs] : refs).slice(0, MAX_ATTACHMENTS),
+    attachments: sceneAttachments(p, s, keys),
   });
 }
 
@@ -91,7 +98,7 @@ export async function renderSceneImage(p: Project, sceneId: string, report: Repo
 export async function renderSceneVideo(p: Project, sceneId: string, report: Report) {
   const s = scene(p, sceneId);
   let start: string | undefined;
-  if (s.continuesPrevious) {
+  if (s.continuesPrevious && !s.exactFrameKey) {
     const prevClip = renderFile(p, previous(p, s)?.videoFile);
     if (prevClip) {
       report("Taking the last frame of the previous clip…");
@@ -100,13 +107,20 @@ export async function renderSceneVideo(p: Project, sceneId: string, report: Repo
       report("The previous scene has no clip yet, so this one can't pick up from it; using its own frame.");
     }
   }
+  // A pinned exact image wins over everything: the clip starts on the photo itself.
+  if (s.exactFrameKey) {
+    report("Starting the clip on your exact image…");
+    start = await makeExactFrame(p, s);
+  }
   start ??= renderFile(p, s.imageFile);
-  // From a start frame the product is already in the picture; without one, its photos go in first.
+  // From a start frame the product is already in the picture; without one, the scene's chosen images go in.
   const products = sceneProducts(p, s);
-  const refs = [...productRefs(p, products), ...characterRefs(p, cast(p, s), true)].slice(0, MAX_ATTACHMENTS);
+  const refs = sceneAttachments(p, s, chosenRefKeys(p, s, false));
   const { file, src } = await generateMedia(p, report, `scene-${pad(s.number)}-clip`, {
     kind: "video",
-    prompt: withLocks(p, s.videoPrompt || s.action, products),
+    prompt: s.exactFrameKey
+      ? `${EXACT_START} ${withLocks(p, s.videoPrompt || s.action, products)}`
+      : withLocks(p, s.videoPrompt || s.action, products),
     aspect: p.settings.aspectRatio,
     durationSec: s.durationSec,
     videoMode: start ? "frames" : "ingredients",
@@ -142,8 +156,22 @@ export async function upscaleClip(p: Project, sceneId: string, report: Report): 
     });
   }
 
-  // Have Chrome save downloads into the renders folder under a temporary name, and tell us when done.
-  const dir = ensureDir(rendersDir(p.id));
+  report(`Flow is upscaling scene ${s.number} to 1080p (about a minute)…`);
+  const hd = path.join(ensureDir(rendersDir(p.id)), path.basename(original).replace(/\.mp4$/i, "") + "-1080p.mp4");
+  await downloadFromMenu(page, tile, "1080p", hd, 10 * 60_000);
+  updateProject(p.id, (x) => {
+    const sc = x.scenes.find((y) => y.id === s.id);
+    if (sc && sc.videoFile === s.videoFile) sc.videoHdFile = path.basename(hd);
+  });
+  return hd;
+}
+
+/**
+ * Save a tile's media with Flow's own Download menu (option "720p" = original size, "1080p" = Flow's upscale).
+ * Chrome saves into the target folder under a temporary name and reports when it's done.
+ */
+export async function downloadFromMenu(page: Page, tile: Locator, option: string, target: string, timeoutMs: number) {
+  const dir = path.dirname(target);
   const cdp = await (await getBrowser()).newBrowserCDPSession();
   try {
     await cdp.send("Browser.setDownloadBehavior", { behavior: "allowAndName", downloadPath: dir, eventsEnabled: true });
@@ -152,27 +180,21 @@ export async function upscaleClip(p: Project, sceneId: string, report: Report): 
         if (e.state !== "inProgress") resolve(e);
       }),
     );
-    await tile.evaluate((t) => t.scrollIntoView({ block: "center" }));
+    for (let i = 0; i < 3; i++) await page.keyboard.press("Escape");
+    await tile.evaluate((el) => el.scrollIntoView({ block: "center" }));
     await tile.hover({ position: { x: 40, y: 12 }, force: true });
     await tile.locator('[aria-label="More options"]').first().click();
     const menu = page.locator(".cdk-overlay-container [role=menuitem]");
     await menu.filter({ hasText: /download/i }).first().click();
-    await menu.filter({ hasText: "1080p" }).first().click();
-    report(`Flow is upscaling scene ${s.number} to 1080p (about a minute)…`);
+    await menu.filter({ hasText: option }).first().click();
     const result = await Promise.race([
       finished,
-      new Promise<{ guid: string; state: string }>((r) => setTimeout(() => r({ guid: "", state: "timeout" }), 10 * 60_000)),
+      new Promise<{ guid: string; state: string }>((r) => setTimeout(() => r({ guid: "", state: "timeout" }), timeoutMs)),
     ]);
     if (result.state !== "completed") {
-      throw new Error(result.state === "timeout" ? "Flow's 1080p upscale took too long." : "Flow's 1080p download was cancelled.");
+      throw new Error(result.state === "timeout" ? "Flow's download took too long." : "Flow's download was cancelled.");
     }
-    const hd = path.join(dir, path.basename(original).replace(/\.mp4$/i, "") + "-1080p.mp4");
-    fs.renameSync(path.join(dir, result.guid), hd);
-    updateProject(p.id, (x) => {
-      const sc = x.scenes.find((y) => y.id === s.id);
-      if (sc && sc.videoFile === s.videoFile) sc.videoHdFile = path.basename(hd);
-    });
-    return hd;
+    fs.renameSync(path.join(dir, result.guid), target);
   } finally {
     await cdp.send("Browser.setDownloadBehavior", { behavior: "default" }).catch(() => {});
     await cdp.detach().catch(() => {});
@@ -180,9 +202,12 @@ export async function upscaleClip(p: Project, sceneId: string, report: Report): 
   }
 }
 
-/** Flow's id for a video: the path in its media URL (flow-content.google/video/<id>). */
+/**
+ * Flow's id for a video, from its media URL: flow-content.google/video/<uuid>, or flow.google.com/asb/<token>
+ * (the asb token stays the same across page loads).
+ */
 function flowVideoId(src: string) {
-  return /\/video\/([\w-]+)/.exec(src)?.[1];
+  return /\/video\/([\w-]+)/.exec(src)?.[1] ?? /\/asb\/([^?=/]+)/.exec(src)?.[1];
 }
 
 /**
@@ -220,7 +245,7 @@ async function findClipTile(page: Page, flowId: string | undefined, size: number
       const id = flowVideoId(src);
       if (!id) continue;
       checked.add(src.split("?")[0]);
-      if (flowId ? id === flowId : await sameSize(src, size)) return { tile, id };
+      if (flowId ? id === flowId : await sameSize(page, src, size)) return { tile, id };
     }
     stalePasses = progressed ? 0 : stalePasses + 1;
     // Scroll the grid's own container by most of a screen (a mouse wheel does nothing in the hidden window).
@@ -258,7 +283,11 @@ async function hoverForVideo(page: Page, tile: ReturnType<Page["locator"]>) {
 }
 
 /** Flow's signed links ignore HEAD and Range, so start a normal download, read its size, and stop. */
-async function sameSize(src: string, size: number) {
+async function sameSize(page: Page, src: string, size: number) {
+  if (src.includes("/asb/")) {
+    // These need the signed-in browser; Flow's streaming copy isn't the original file, so sizes can't match.
+    return false;
+  }
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), 10_000);
   try {
@@ -295,13 +324,44 @@ function scene(p: Project, id: string) {
   return s;
 }
 
-function cast(p: Project, s: Scene) {
-  return p.characters.filter((c) => s.characterIds.includes(c.id));
+/** Products in a scene: the ones it lists, plus every locked product. */
+/** The files behind a scene's chosen image keys (see shared/attachments.ts); missing files are skipped. */
+function sceneAttachments(p: Project, s: Scene, keys: string[]): Attachment[] {
+  const out: Attachment[] = [];
+  for (const key of keys) {
+    const file = keyFile(p, s, key);
+    if (!file) continue;
+    // References keep their own upload name, so one already in Flow is reused.
+    const ref = key.startsWith("ref:") ? p.references.find((x) => x.id === key.slice(4)) : undefined;
+    out.push(ref ? { name: `fsph-${ref.id}${path.extname(ref.file)}`, file } : upload(file));
+  }
+  return out.slice(0, MAX_REFS);
 }
 
-/** Products in a scene: the ones it lists, plus every locked product. */
-function sceneProducts(p: Project, s: Scene) {
-  return (p.products ?? []).filter((x) => x.locked || s.productIds?.includes(x.id));
+/** The file on disk behind an image key, if it exists. */
+function keyFile(p: Project, s: Scene, key: string): string | undefined {
+  const [kind, id] = key.split(":");
+  if (kind === "ref") {
+    const r = p.references.find((x) => x.id === id);
+    const file = r && path.join(refsDir(p.id), r.file);
+    return file && fs.existsSync(file) ? file : undefined;
+  }
+  return kind === "prev-frame" ? renderFile(p, previous(p, s)?.imageFile)
+    : kind === "portrait" ? renderFile(p, p.characters.find((c) => c.id === id)?.portraitFile)
+    : kind === "product-shot" ? renderFile(p, p.products?.find((x) => x.id === id)?.shotFile)
+    : undefined;
+}
+
+const EXACT_START =
+  "The clip starts on the exact photo in the start frame. Keep everything in it, especially the product's packaging, label text and logo, exactly as it is: do not redraw or redesign it. Animate gently.";
+
+/** The scene's pinned image as an exact frame at the video's size (see exactFrame in media.ts). */
+async function makeExactFrame(p: Project, s: Scene) {
+  const photo = keyFile(p, s, s.exactFrameKey!);
+  if (!photo) throw new Error("The image pinned as this scene's exact frame is missing. Pick another one.");
+  const [w, h] = p.settings.aspectRatio === "9:16" ? [1080, 1920] : [1920, 1080];
+  const out = path.join(ensureDir(rendersDir(p.id)), `scene-${pad(s.number)}-frame-exact-${Date.now().toString(36)}.jpg`);
+  return exactFrame(photo, out, w, h);
 }
 
 /** Up to two photos per product, so a product never crowds the cast out of Flow's three references. */
@@ -345,7 +405,7 @@ function characterRefs(p: Project, chars: Character[], preferPortrait: boolean):
       out.push({ name: `fsph-${r.id}${path.extname(r.file)}`, file: path.join(refsDir(p.id), r.file) });
     }
   }
-  return out.filter((a) => fs.existsSync(a.file)).slice(0, MAX_ATTACHMENTS);
+  return out.filter((a) => fs.existsSync(a.file)).slice(0, MAX_REFS);
 }
 
 // ---------------------------------------------------------------- the Flow page
@@ -368,15 +428,29 @@ async function generateMedia(p: Project, report: Report, baseName: string, req: 
   await configure(page, req);
   await clearAttachments(page);
 
-  const expected: string[] = [];
-  for (const [i, a] of req.attachments.entries()) {
-    report(fromFrame ? "Setting the start frame…" : `Attaching reference ${i + 1} of ${req.attachments.length}…`);
-    expected.push(await attach(page, a, fromFrame ? "start" : "reference"));
-  }
+  const attachAll = async () => {
+    const ids: string[] = [];
+    for (const [i, a] of req.attachments.entries()) {
+      report(fromFrame ? "Setting the start frame…" : `Attaching reference ${i + 1} of ${req.attachments.length}…`);
+      ids.push(await attach(page, a, fromFrame ? "start" : "reference"));
+    }
+    return ids;
+  };
+  let expected = await attachAll();
 
   report("Setting up the generation…");
   const credits = await configure(page, req);
-  await checkAttachments(page, req, expected);
+  try {
+    await checkAttachments(page, req, expected);
+  } catch {
+    // Usually a fresh upload Flow is still processing: clear, wait a moment and attach once more.
+    report("Re-attaching references…");
+    await clearAttachments(page);
+    await page.waitForTimeout(3000);
+    expected = await attachAll();
+    await configure(page, req);
+    await checkAttachments(page, req, expected);
+  }
   const cap = readSettings().maxCreditsPerClip;
   if (credits > cap) {
     await resetComposer(page);
@@ -394,9 +468,18 @@ async function generateMedia(p: Project, report: Report, baseName: string, req: 
 
   const src = await waitForResult(page, before, req.kind, report);
   report("Downloading…");
+  const dir = ensureDir(rendersDir(p.id));
+  if (req.kind === "video" && src.includes("/asb/")) {
+    // This kind of link only plays inside Flow (and in reduced quality), so use Flow's own Download menu.
+    const file = `${baseName}-${Date.now().toString(36)}.mp4`;
+    const tile = page.locator("flow-grid-tile-container").filter({ has: page.locator(`video[src="${src}"], source[src="${src}"]`) }).first();
+    const target = (await tile.count()) ? tile : page.locator("flow-grid-tile-container").first();
+    await downloadFromMenu(page, target, "720p", path.join(dir, file), 3 * 60_000);
+    return { file, src };
+  }
   const { bytes, ext } = await download(page, src, req.kind);
   const file = `${baseName}-${Date.now().toString(36)}${ext}`;
-  fs.writeFileSync(path.join(ensureDir(rendersDir(p.id)), file), bytes);
+  fs.writeFileSync(path.join(dir, file), bytes);
   return { file, src };
 }
 

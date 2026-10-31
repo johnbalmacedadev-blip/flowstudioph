@@ -46,6 +46,12 @@ export const api = {
   importStoryboard: (id: string, json: string) => call<Project>("POST", `${P(id)}/storyboard`, { json }),
 
   updateScene: (id: string, sceneId: string, patch: Partial<Scene>) => call<Project>("PUT", `${P(id)}/scenes/${sceneId}`, patch),
+  /** Your own image picks for a scene, or null to let the app choose again. */
+  setSceneRefs: (id: string, sceneId: string, keys: string[] | null) =>
+    call<Project>("PUT", `${P(id)}/scenes/${sceneId}`, { refOverride: keys }),
+  /** Use an image as the scene's exact frame (no frame generated), or null to generate frames again. */
+  setSceneExact: (id: string, sceneId: string, key: string | null) =>
+    call<Project>("PUT", `${P(id)}/scenes/${sceneId}`, { exactFrameKey: key }),
   addScene: (id: string, afterId?: string) => call<Project>("POST", `${P(id)}/scenes`, { afterId }),
   moveScene: (id: string, sceneId: string, direction: "up" | "down") =>
     call<Project>("POST", `${P(id)}/scenes/${sceneId}/move`, { direction }),

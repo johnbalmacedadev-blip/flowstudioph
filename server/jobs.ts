@@ -59,6 +59,9 @@ export function friendlyError(e: Error): string {
   if (/Target (page|closed)|browser has been closed|ECONNREFUSED/i.test(first)) {
     return "The Google Flow window was closed. Click Connect Google Flow, then try again.";
   }
+  if (/Failed to fetch/i.test(first)) {
+    return "Flow made it, but downloading it failed. It's still in your Flow project (Show Flow to see it); try the download again by rendering once more.";
+  }
   return first.replace(/^(locator|page|browserType)\.\w+: /, "");
 }
 

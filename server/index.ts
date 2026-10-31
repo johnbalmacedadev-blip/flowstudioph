@@ -6,6 +6,7 @@ import {
   DURATIONS, EXPORT_RESOLUTIONS, type Character, type ExportResolution, type Product, type Project, type ReferenceKind,
   type Scene,
 } from "../shared/types.js";
+import { MAX_REFS } from "../shared/attachments.js";
 import { deleteExport, exportFinalCut, resetFinalCut, saveFinalCut, syncFinalCut } from "./finalcut.js";
 import { breakdownWithFlowAgent } from "./flow/agent.js";
 import { connectFlow, flowStatus, setWindowVisible } from "./flow/browser.js";
@@ -145,7 +146,7 @@ app.post("/api/projects/:id/storyboard", (req, res) => {
 
 // ---- characters & scenes ----
 const SCENE_FIELDS: (keyof Scene)[] = [
-  "title", "durationSec", "location", "characterIds", "action", "shot", "imagePrompt", "videoPrompt", "dialogue", "sound", "continuesPrevious", "productIds",
+  "title", "durationSec", "location", "characterIds", "action", "shot", "imagePrompt", "videoPrompt", "dialogue", "sound", "continuesPrevious", "productIds", "refOverride", "exactFrameKey",
 ];
 const CHAR_FIELDS: (keyof Character)[] = ["name", "role", "description", "visualPrompt", "referenceIds"];
 
@@ -156,6 +157,22 @@ app.put("/api/projects/:id/scenes/:sceneId", (req, res) => {
       if (!s) return;
       const patch = pick<Scene>(req.body, SCENE_FIELDS);
       if (patch.durationSec !== undefined && !DURATIONS.includes(patch.durationSec)) delete patch.durationSec;
+      // refOverride: a list of image keys (your own picks), or null to go back to automatic.
+      if ((patch.refOverride as unknown) === null) {
+        delete patch.refOverride;
+        delete s.refOverride;
+      } else if (patch.refOverride !== undefined) {
+        patch.refOverride = Array.isArray(patch.refOverride)
+          ? [...new Set(patch.refOverride.filter((k): k is string => typeof k === "string"))].slice(0, MAX_REFS)
+          : undefined;
+      }
+      // exactFrameKey: an image key to use as the exact frame, or null to generate the frame again.
+      if ((patch.exactFrameKey as unknown) === null) {
+        delete patch.exactFrameKey;
+        delete s.exactFrameKey;
+      } else if (patch.exactFrameKey !== undefined && typeof patch.exactFrameKey !== "string") {
+        delete patch.exactFrameKey;
+      }
       Object.assign(s, patch);
     }),
   );
