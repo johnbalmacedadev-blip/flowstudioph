@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Locator, Page } from "playwright-core";
-import { chosenRefKeys, exactKeys, MAX_REFS, sceneProducts } from "../../shared/attachments.js";
+import { chosenRefKeys, exactKeys, MAX_REFS, pinFrameKey, pinRefKeys, sceneProducts } from "../../shared/attachments.js";
 import type { Character, Product, Project, Scene } from "../../shared/types.js";
 import { exactFrame, lastFrame } from "../media.js";
 import { ensureDir, refsDir, rendersDir } from "../paths.js";
@@ -72,6 +72,41 @@ export async function renderProductShot(p: Project, productId: string, report: R
 const CONTINUE_FRAME =
   "Continue the exact same scene as the first reference image: same location, set, props, lighting, time of day and wardrobe, as the next moment of the same shot.";
 
+const PIN_FRAME =
+  "Recreate the first reference image as closely as possible: same place, people, pose, framing, lighting and wardrobe. Bring in what the other reference images show exactly as they are, keeping any product's packaging, label text and logo unchanged.";
+
+/**
+ * A pinned scene's frame. The start image alone is used exactly (nothing generated). With images added to it,
+ * Flow redraws it with those in it, the start image leading the references. For a clip (reuse = true) a
+ * frame already made from the same images is reused.
+ */
+async function pinnedFrame(p: Project, s: Scene, report: Report, reuse = false): Promise<string> {
+  const key = pinFrameKey(p, s);
+  const current = renderFile(p, s.imageFile);
+  if (reuse && current && s.frameKey === key) return current;
+  const added = pinRefKeys(p, s);
+  let file: string;
+  if (!added.length) {
+    report("Using your exact image as the frame…");
+    file = await makeExactFrame(p, s, exactKeys(s)[0], "start");
+  } else {
+    report("Redrawing your start image with the added images…");
+    const exact = await makeExactFrame(p, s, exactKeys(s)[0], "start");
+    const name = await generate(p, report, `scene-${pad(s.number)}-frame`, {
+      kind: "image",
+      prompt: `${PIN_FRAME} ${withLocks(p, s.imagePrompt || s.action, sceneProducts(p, s))} ${NO_TEXT}`,
+      aspect: p.settings.aspectRatio,
+      attachments: [upload(exact), ...(await sceneAttachments(p, s, added))].slice(0, MAX_REFS),
+    });
+    file = path.join(rendersDir(p.id), name);
+  }
+  updateProject(p.id, (x) => {
+    const sc = x.scenes.find((y) => y.id === s.id);
+    if (sc) Object.assign(sc, { frameKey: key, imageFile: path.basename(file), imageStatus: "done" });
+  });
+  return file;
+}
+
 /**
  * A seamless scene's start frame with its products in it: the previous clip's last frame leads the references,
  * followed by the scene's own images (product photos first). It becomes the scene's frame too.
@@ -102,11 +137,7 @@ async function bridgeFrame(p: Project, s: Scene, last: string, report: Report) {
 export async function renderSceneImage(p: Project, sceneId: string, report: Report) {
   const s = scene(p, sceneId);
   const pins = exactKeys(s);
-  if (pins.length) {
-    // Pinned exact image: nothing is generated, the photo itself becomes the frame.
-    report("Using your exact image as the frame…");
-    return path.basename(await makeExactFrame(p, s, pins[0], "start"));
-  }
+  if (pins.length) return path.basename(await pinnedFrame(p, s, report));
   const keys = chosenRefKeys(p, s, true);
   if (s.continuesPrevious && !keys.includes("prev-frame") && !s.refOverride) {
     report("No frame for the previous scene yet; matching the cast only.");
@@ -146,7 +177,7 @@ export async function renderSceneVideo(p: Project, sceneId: string, report: Repo
   // Pinned exact images win over everything: the clip starts (and maybe ends) on the images themselves.
   if (pins.length) {
     report(pins.length > 1 ? "Setting your exact start and end images…" : "Starting the clip on your exact image…");
-    start = await makeExactFrame(p, s, pins[0], "start");
+    start = await pinnedFrame(p, s, report, true);
     if (pins[1]) end = await makeExactFrame(p, s, pins[1], "end");
   }
   start ??= renderFile(p, s.imageFile);

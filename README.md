@@ -45,8 +45,9 @@ Your script ──> Flow Studio PH ──> Chrome (signed in to Flow) ──> Fl
    **📌 Start** on any of those images uses it as the scene's frame exactly as it is: nothing is generated for
    the frame (it's fitted to the video's shape, any gap filled with a blurred copy of the same photo), and the
    clip starts on it with Flow told to keep it unchanged. Use it for packshots where the label must be exact.
-   Then **📌 End** on a second image makes the clip finish exactly on that one (Flow's End frame); while images
-   are pinned, nothing else is sent. **Scene N clip end** (the last frame of the previous clip) is offered too:
+   Then **📌 End** on a second image makes the clip finish exactly on that one (Flow's End frame). With a start
+   pinned you can still tick up to 2 other images (your product, say): the frame is then redrawn from the start
+   image with them in it, and **↻ Regenerate frame** makes it again (it lights up when the images changed). **Scene N clip end** (the last frame of the previous clip) is offered too:
    pin it as Start to begin exactly where the last scene stopped. **×** takes an image off that scene's list
    (it stays in the project); **Show removed** lists them with **Put back**.
 5. **Seamless scenes.** The storyboard keeps the story in one location unless the script moves it, and marks each scene

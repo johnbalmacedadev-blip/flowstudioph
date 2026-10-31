@@ -147,7 +147,7 @@ app.post("/api/projects/:id/storyboard", (req, res) => {
 
 // ---- characters & scenes ----
 const SCENE_FIELDS: (keyof Scene)[] = [
-  "title", "durationSec", "location", "characterIds", "action", "shot", "imagePrompt", "videoPrompt", "dialogue", "sound", "continuesPrevious", "productIds", "refOverride", "exactFrameKeys", "hiddenRefKeys",
+  "title", "durationSec", "location", "characterIds", "action", "shot", "imagePrompt", "videoPrompt", "dialogue", "sound", "continuesPrevious", "productIds", "refOverride", "exactFrameKeys", "hiddenRefKeys", "pinRefKeys",
 ];
 const CHAR_FIELDS: (keyof Character)[] = ["name", "role", "description", "visualPrompt", "referenceIds"];
 
@@ -169,7 +169,7 @@ app.put("/api/projects/:id/scenes/:sceneId", (req, res) => {
       }
       // exactFrameKeys: up to two image keys used exactly (start, end); [] or null to generate frames again.
       // hiddenRefKeys: images taken off this scene's list. Both replace the older single exactFrameKey.
-      for (const field of ["exactFrameKeys", "hiddenRefKeys"] as const) {
+      for (const field of ["exactFrameKeys", "hiddenRefKeys", "pinRefKeys"] as const) {
         const value = patch[field] as unknown;
         if (value === undefined) continue;
         const list = Array.isArray(value) ? [...new Set(value.filter((k): k is string => typeof k === "string"))] : [];
@@ -181,11 +181,18 @@ app.put("/api/projects/:id/scenes/:sceneId", (req, res) => {
         }
       }
       Object.assign(s, patch);
-      // A removed image can't stay pinned.
+      // Pinning a removed image puts it back; removing a pinned image unpins it.
+      if (patch.exactFrameKeys && s.hiddenRefKeys?.length) {
+        s.hiddenRefKeys = s.hiddenRefKeys.filter((k) => !patch.exactFrameKeys!.includes(k));
+        if (!s.hiddenRefKeys.length) delete s.hiddenRefKeys;
+      }
       if (s.hiddenRefKeys?.length && s.exactFrameKeys?.length) {
         s.exactFrameKeys = s.exactFrameKeys.filter((k) => !s.hiddenRefKeys!.includes(k));
         if (!s.exactFrameKeys.length) delete s.exactFrameKeys;
       }
+      if (s.hiddenRefKeys?.length && s.pinRefKeys?.length) s.pinRefKeys = s.pinRefKeys.filter((k) => !s.hiddenRefKeys!.includes(k));
+      // Added images belong to a pinned start; without one they go.
+      if (!s.exactFrameKeys?.length && !s.exactFrameKey) delete s.pinRefKeys;
     }),
   );
 });

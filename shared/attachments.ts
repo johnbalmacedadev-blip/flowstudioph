@@ -43,6 +43,22 @@ export function exactKeys(s: Scene): string[] {
   return (s.exactFrameKeys ?? (s.exactFrameKey ? [s.exactFrameKey] : [])).slice(0, 2);
 }
 
+/** Images added to a pinned start (the start takes one of Flow's three slots). */
+export function pinRefKeys(p: Project, s: Scene): string[] {
+  const available = new Set(refOptions(p, s).map((o) => o.key));
+  const pins = exactKeys(s);
+  return (s.pinRefKeys ?? []).filter((k) => available.has(k) && !pins.includes(k)).slice(0, MAX_REFS - 1);
+}
+
+/** What a pinned scene's frame is made from; compared with scene.frameKey to tell if the frame is out of date. */
+export function pinFrameKey(p: Project, s: Scene): string {
+  // The previous scene's images change when it's re-rendered, so they count by file.
+  const prev = previousScene(p, s);
+  const file = (k: string | undefined) =>
+    k === "prev-last" ? `prev-last:${prev?.videoFile ?? ""}` : k === "prev-frame" ? `prev-frame:${prev?.imageFile ?? ""}` : k ?? null;
+  return JSON.stringify([file(exactKeys(s)[0]), ...pinRefKeys(p, s).map(file)]);
+}
+
 function allRefOptions(p: Project, s: Scene): RefOption[] {
   const out: RefOption[] = [];
   const refsById = new Map(p.references.map((r) => [r.id, r]));
@@ -50,10 +66,10 @@ function allRefOptions(p: Project, s: Scene): RefOption[] {
 
   const prev = previousScene(p, s);
   if (prev?.videoFile) {
-    out.push({ key: "prev-last", label: `Scene ${prev.number} clip end`, group: "Continuity", folder: "renders", file: lastFrameFile(prev.videoFile) });
+    out.push({ key: "prev-last", label: `End of #${prev.number}`, group: "Continuity", folder: "renders", file: lastFrameFile(prev.videoFile) });
   }
   if (prev?.imageFile) {
-    out.push({ key: "prev-frame", label: `Scene ${prev.number} frame`, group: "Continuity", folder: "renders", file: prev.imageFile });
+    out.push({ key: "prev-frame", label: `#${prev.number} still`, group: "Continuity", folder: "renders", file: prev.imageFile });
   }
   for (const x of p.products ?? []) {
     for (const id of x.referenceIds) {
@@ -112,8 +128,10 @@ export function chosenRefKeys(p: Project, s: Scene, forFrame: boolean): string[]
  * only products with at least one image ticked, so unticking a product's images takes it out of the shot.
  */
 export function sceneProducts(p: Project, s: Scene): Product[] {
-  if (!s.refOverride) return autoProducts(p, s);
-  const picked = new Set(s.refOverride);
+  // A pinned start with images added: the products among the pinned and added images.
+  const pinned = exactKeys(s).length && s.pinRefKeys?.length ? [...exactKeys(s), ...s.pinRefKeys] : undefined;
+  if (!pinned && !s.refOverride) return autoProducts(p, s);
+  const picked = new Set(pinned ?? s.refOverride);
   return (p.products ?? []).filter(
     (x) => picked.has(`product-shot:${x.id}`) || x.referenceIds.some((id) => picked.has(`ref:${id}`)),
   );

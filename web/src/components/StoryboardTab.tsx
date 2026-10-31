@@ -107,6 +107,7 @@ export function StoryboardTab({ project, flow, onChange, onError }: Props) {
                 .catch((e) => onError(e.message))
             }
             onHidden={(keys) => run(api.setSceneHidden(id, s.id, keys))}
+            onPinRefs={(keys) => run(api.setScenePinRefs(id, s.id, keys))}
             onMove={(d) => run(api.moveScene(id, s.id, d))}
             onAddAfter={() => run(api.addScene(id, s.id))}
             onDelete={() => confirm(`Delete scene ${s.number}?`) && run(api.deleteScene(id, s.id))}
@@ -119,7 +120,7 @@ export function StoryboardTab({ project, flow, onChange, onError }: Props) {
   );
 }
 
-function SceneCard({ project, scene: s, first, last, open, onToggle, onPatch, onRefs, onExact, onHidden, onMove, onAddAfter, onDelete, onRender }: {
+function SceneCard({ project, scene: s, first, last, open, onToggle, onPatch, onRefs, onExact, onHidden, onPinRefs, onMove, onAddAfter, onDelete, onRender }: {
   project: Project;
   scene: Scene;
   first: boolean;
@@ -130,6 +131,7 @@ function SceneCard({ project, scene: s, first, last, open, onToggle, onPatch, on
   onRefs: (keys: string[] | null) => void;
   onExact: (keys: string[]) => void;
   onHidden: (keys: string[]) => void;
+  onPinRefs: (keys: string[]) => void;
   onMove: (d: "up" | "down") => void;
   onAddAfter: () => void;
   onDelete: () => void;
@@ -179,7 +181,8 @@ function SceneCard({ project, scene: s, first, last, open, onToggle, onPatch, on
         <p className="action">{s.action}</p>
         {s.dialogue && <p className="dialogue">{s.dialogue}</p>}
 
-        <SceneRefs project={project} scene={s} onChange={onRefs} onExact={onExact} onHidden={onHidden} />
+        <SceneRefs project={project} scene={s} onChange={onRefs} onExact={onExact} onHidden={onHidden} onPinRefs={onPinRefs}
+          busy={isBusy(s.imageStatus) || isBusy(s.videoStatus)} onRegenerate={() => onRender("image")} />
 
         {open && (
           <div className="prompts">

@@ -55,6 +55,9 @@ export const api = {
   /** Images taken off a scene's list (they stay in the project). */
   setSceneHidden: (id: string, sceneId: string, keys: string[]) =>
     call<Project>("PUT", `${P(id)}/scenes/${sceneId}`, { hiddenRefKeys: keys }),
+  /** Images added to a scene's pinned start image. */
+  setScenePinRefs: (id: string, sceneId: string, keys: string[]) =>
+    call<Project>("PUT", `${P(id)}/scenes/${sceneId}`, { pinRefKeys: keys }),
   addScene: (id: string, afterId?: string) => call<Project>("POST", `${P(id)}/scenes`, { afterId }),
   moveScene: (id: string, sceneId: string, direction: "up" | "down") =>
     call<Project>("POST", `${P(id)}/scenes/${sceneId}/move`, { direction }),

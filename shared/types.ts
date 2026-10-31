@@ -87,6 +87,10 @@ export interface Scene {
   exactFrameKey?: string;
   /** Images taken off this scene's list (not offered, not sent). They stay in the project. */
   hiddenRefKeys?: string[];
+  /** With a pinned start: images added to it (a product, say). The frame is then redrawn from the start image with these in it. */
+  pinRefKeys?: string[];
+  /** What the current frame was made from (pinned start + added images), to tell when it needs redrawing. */
+  frameKey?: string;
   imageStatus: RenderStatus;
   imageFile?: string;
   videoStatus: RenderStatus;

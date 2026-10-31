@@ -385,3 +385,8 @@ input[type="range"] { padding: 0; accent-color: var(--accent); border: none; box
 .refs-row.removed { padding-top: 6px; border-top: 1px dashed var(--line); }
 .refs-row.removed .ref-pick { opacity: 0.45; cursor: default; }
 .pin:disabled { opacity: 0.35; cursor: not-allowed; }
+.seam-warn {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; padding: 8px 10px;
+  border-radius: 8px; border: 1px solid rgba(255, 176, 32, 0.4); background: rgba(255, 176, 32, 0.08);
+}
+.seam-warn span { flex: 1; min-width: 200px; }
