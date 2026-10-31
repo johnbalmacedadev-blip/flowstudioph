@@ -72,6 +72,33 @@ export async function renderProductShot(p: Project, productId: string, report: R
 const CONTINUE_FRAME =
   "Continue the exact same scene as the first reference image: same location, set, props, lighting, time of day and wardrobe, as the next moment of the same shot.";
 
+/**
+ * A seamless scene's start frame with its products in it: the previous clip's last frame leads the references,
+ * followed by the scene's own images (product photos first). It becomes the scene's frame too.
+ */
+async function bridgeFrame(p: Project, s: Scene, last: string, report: Report) {
+  report("Putting the product into the start frame…");
+  const products = sceneProducts(p, s);
+  const own = new Set(products.flatMap((x) => x.referenceIds.map((id) => `ref:${id}`)));
+  const keys = chosenRefKeys(p, s, true).filter((k) => !k.startsWith("prev-"));
+  keys.sort((a, b) => Number(own.has(b)) - Number(own.has(a)));
+  const refs = await sceneAttachments(p, s, keys);
+  if (!refs.some((a) => products.some((x) => x.referenceIds.some((id) => a.name.startsWith(`fsph-${id}`))))) {
+    refs.unshift(...productRefs(p, products).slice(0, 1));
+  }
+  const file = await generate(p, report, `scene-${pad(s.number)}-frame`, {
+    kind: "image",
+    prompt: `${CONTINUE_FRAME} ${withLocks(p, s.imagePrompt || s.action, products)} ${NO_TEXT}`,
+    aspect: p.settings.aspectRatio,
+    attachments: [upload(last), ...refs].slice(0, MAX_REFS),
+  });
+  updateProject(p.id, (x) => {
+    const sc = x.scenes.find((y) => y.id === s.id);
+    if (sc) Object.assign(sc, { imageFile: file, imageStatus: "done" });
+  });
+  return path.join(rendersDir(p.id), file);
+}
+
 export async function renderSceneImage(p: Project, sceneId: string, report: Report) {
   const s = scene(p, sceneId);
   const pins = exactKeys(s);
@@ -109,6 +136,9 @@ export async function renderSceneVideo(p: Project, sceneId: string, report: Repo
     if (prevClip) {
       report("Taking the last frame of the previous clip…");
       start = await lastFrame(prevClip);
+      // A clip from a start frame gets no other images, so a product missing from that frame would be invented
+      // from the prompt. Bring the product in first: a new frame that continues the last one, with its photos.
+      if (sceneProducts(p, s).length) start = await bridgeFrame(p, s, start, report);
     } else {
       report("The previous scene has no clip yet, so this one can't pick up from it; using its own frame.");
     }
