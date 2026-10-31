@@ -92,7 +92,7 @@ export function clipPrompt(s: Scene): string {
 }
 
 const PIN_FRAME =
-  "Edit the first reference image: keep it exactly as it is (same place, framing, lighting, and each person's face, hair, clothes and look) and only bring in what the other reference images show, the way this scene describes. Other images of a person only show who they are: keep the hair and clothes from the first image. Keep any product's packaging, label text and logo exactly as photographed.";
+  "Edit the first reference image, don't redraw it: keep the same place, camera framing and lighting, each person's face, hair, clothes and look, and every object already there (everything on the table or counter stays where it is). Only change what this shot's action needs, and add what the other reference images show. Other images of a person only show who they are: keep the hair and clothes from the first image. Keep any product's packaging, label text and logo exactly as photographed.";
 
 /**
  * A pinned scene's frame. The start image alone is used exactly (nothing generated). With images added to it,
@@ -114,7 +114,8 @@ async function pinnedFrame(p: Project, s: Scene, report: Report, reuse = false):
     const exact = await makeExactFrame(p, s, exactKeys(s)[0], "start");
     const name = await generate(p, report, `scene-${pad(s.number)}-frame`, {
       kind: "image",
-      prompt: `${PIN_FRAME} ${withLocks(p, s.imagePrompt || s.action, sceneProducts(p, s), s)} ${NO_TEXT}`,
+      // Just the action, not the frame prompt: that describes a whole new picture, and Flow would redraw the set.
+      prompt: `${PIN_FRAME} ${withLocks(p, s.action.trim() ? "" : s.imagePrompt, sceneProducts(p, s), s)} ${NO_TEXT}`,
       aspect: p.settings.aspectRatio,
       attachments: [upload(exact), ...(await sceneAttachments(p, s, added))].slice(0, MAX_REFS),
     });
