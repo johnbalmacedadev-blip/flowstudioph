@@ -207,4 +207,10 @@ export interface FlowStatus {
   windowVisible: boolean;
   url: string;
   message: string;
+  /** Google Flow credits left, as Flow's account menu last showed them. */
+  credits?: number;
+  /** Flow's own note on when the credits reset ("Resets Nov 18 at 2:19 PM"). */
+  creditsResets?: string;
+  /** When credits was read (ISO time). */
+  creditsAt?: string;
 }

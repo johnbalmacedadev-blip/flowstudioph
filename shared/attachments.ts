@@ -56,7 +56,9 @@ export function pinFrameKey(p: Project, s: Scene): string {
   const prev = previousScene(p, s);
   const file = (k: string | undefined) =>
     k === "prev-last" ? `prev-last:${prev?.videoFile ?? ""}` : k === "prev-frame" ? `prev-frame:${prev?.imageFile ?? ""}` : k ?? null;
-  return JSON.stringify([file(exactKeys(s)[0]), ...pinRefKeys(p, s).map(file)]);
+  const added = pinRefKeys(p, s).map(file);
+  // "edit-2": frames redrawn with added images now keep the start image's people as they are (older ones didn't).
+  return JSON.stringify(added.length ? [file(exactKeys(s)[0]), ...added, "edit-2"] : [file(exactKeys(s)[0])]);
 }
 
 function allRefOptions(p: Project, s: Scene): RefOption[] {

@@ -92,7 +92,7 @@ export function clipPrompt(s: Scene): string {
 }
 
 const PIN_FRAME =
-  "Recreate the first reference image as closely as possible: same place, people, pose, framing, lighting and wardrobe. Bring in what the other reference images show exactly as they are, keeping any product's packaging, label text and logo unchanged.";
+  "Edit the first reference image: keep it exactly as it is (same place, framing, lighting, and each person's face, hair, clothes and look) and only bring in what the other reference images show, the way this scene describes. Other images of a person only show who they are: keep the hair and clothes from the first image. Keep any product's packaging, label text and logo exactly as photographed.";
 
 /**
  * A pinned scene's frame. The start image alone is used exactly (nothing generated). With images added to it,
@@ -100,6 +100,7 @@ const PIN_FRAME =
  * frame already made from the same images is reused.
  */
 async function pinnedFrame(p: Project, s: Scene, report: Report, reuse = false): Promise<string> {
+  // (Used as the scene's frame, and as a clip's end frame when images were added to a pinned start.)
   const key = pinFrameKey(p, s);
   const current = renderFile(p, s.imageFile);
   if (reuse && current && s.frameKey === key) return current;
@@ -196,8 +197,11 @@ export async function renderSceneVideo(p: Project, sceneId: string, report: Repo
   // Pinned exact images win over everything: the clip starts (and maybe ends) on the images themselves.
   if (pins.length) {
     report(pins.length > 1 ? "Setting your exact start and end images…" : "Starting the clip on your exact image…");
-    start = await pinnedFrame(p, s, report, true);
+    start = await makeExactFrame(p, s, pins[0], "start");
     if (pins[1]) end = await makeExactFrame(p, s, pins[1], "end");
+    // Images added to the start (a product, say) can't go into a clip that starts from a frame, so they make
+    // the frame the clip moves to: the start image with them in it.
+    else if (pinRefKeys(p, s).length) end = await pinnedFrame(p, s, report, true);
   }
   start ??= renderFile(p, s.imageFile);
   // From a start frame the product is already in the picture; without one, the scene's chosen images go in.
@@ -219,6 +223,38 @@ export async function renderSceneVideo(p: Project, sceneId: string, report: Repo
     if (sc) Object.assign(sc, { videoFlowId: flowVideoId(src), videoHdFile: undefined });
   });
   return file;
+}
+
+/**
+ * The Google Flow credits left and when they reset, from Flow's account panel (opened if needed, then closed
+ * with its ✕: Escape doesn't close it, and an open panel covers the account button).
+ */
+export async function readCredits(): Promise<{ credits?: number; resets?: string }> {
+  const page = await getFlowPage();
+  const text = page.getByText(/[\d,]+\s+Google Flow credits/i).first();
+  if (!(await text.isVisible().catch(() => false))) {
+    await page.getByRole("button", { name: "Account details", exact: true }).first().click({ timeout: 10_000 });
+  }
+  try {
+    await text.waitFor({ timeout: 8_000 });
+    const m = /([\d,]+)\s+Google Flow credits/i.exec((await text.textContent()) ?? "");
+    const resets = (await page.getByText(/^\s*Resets\s/i).first().textContent({ timeout: 2_000 }).catch(() => null))?.trim();
+    return { credits: m ? Number(m[1].replace(/,/g, "")) : undefined, resets: resets || undefined };
+  } finally {
+    // The panel's own close button: the nearest "close" button around the credits line.
+    const closed = await text
+      .evaluate((el) => {
+        for (let n: Element | null = el; n; n = n.parentElement) {
+          const btn = [...n.querySelectorAll("button, [role=button]")].find((b) =>
+            /close/i.test(`${b.getAttribute("aria-label") ?? ""} ${b.textContent ?? ""}`),
+          ) as HTMLElement | undefined;
+          if (btn) return btn.click(), true;
+        }
+        return false;
+      })
+      .catch(() => false);
+    if (!closed) await page.keyboard.press("Escape").catch(() => {});
+  }
 }
 
 /**

@@ -127,6 +127,7 @@ export default function App() {
           <span>Flow Studio <b>PH</b></span>
         </div>
         <div className="topbar-right">
+          {flow?.signedIn && <CreditsPill flow={flow} onRefresh={() => api.refreshCredits().then(setFlow).catch((e) => setError(e.message))} />}
           <FlowPill flow={flow} connecting={connecting} onConnect={connect}
             onToggleWindow={() => flow && api.flowWindow(!flow.windowVisible).then(setFlow).catch((e) => setError(e.message))} />
           <button className="btn ghost" onClick={() => setShowSettings(true)}>Settings</button>
@@ -179,6 +180,24 @@ export default function App() {
         <SettingsDialog settings={settings} onClose={() => setShowSettings(false)} onSaved={setSettings} />
       )}
     </div>
+  );
+}
+
+/** Google Flow credits left, as Flow last showed them (read after each render); click to read them again. */
+function CreditsPill({ flow, onRefresh }: { flow: FlowStatus; onRefresh: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const known = flow.credits !== undefined;
+  const when = flow.creditsAt && known ? new Date(flow.creditsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
+  return (
+    <button
+      className={`credits-pill ${known && flow.credits! < 100 ? "low" : ""}`}
+      disabled={busy}
+      onClick={() => { setBusy(true); onRefresh().finally(() => setBusy(false)); }}
+      title={`${known ? `Google Flow credits left, as of ${when}. ${flow.creditsResets ? `${flow.creditsResets}. ` : ""}` : ""}Updated after each render. Click to check again (waits for any render to finish).`}
+    >
+      <span className="credits-icon">✦</span>
+      {busy ? "Checking…" : known ? `${flow.credits!.toLocaleString()} credits` : "Credits…"}
+    </button>
   );
 }
 

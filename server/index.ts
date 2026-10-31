@@ -11,8 +11,8 @@ import { lastFrame } from "./media.js";
 import { deleteExport, exportFinalCut, resetFinalCut, saveFinalCut, syncFinalCut } from "./finalcut.js";
 import { breakdownWithFlowAgent } from "./flow/agent.js";
 import { connectFlow, flowStatus, setWindowVisible } from "./flow/browser.js";
-import { renderPortrait, renderProductShot, renderSceneImage, renderSceneVideo } from "./flow/driver.js";
-import { cancelJob, listJobs, queueFlowJob, startJob } from "./jobs.js";
+import { readCredits, renderPortrait, renderProductShot, renderSceneImage, renderSceneVideo } from "./flow/driver.js";
+import { cancelJob, listJobs, queueFlowJob, setAfterFlowJob, startJob, whenFlowIdle } from "./jobs.js";
 import { PROJECTS_DIR, ensureDir, refsDir, safeId } from "./paths.js";
 import { quickSplit } from "./localsplit.js";
 import { cleanSettingsFile, readSettings, writeSettings } from "./settings.js";
@@ -362,8 +362,29 @@ app.get("/api/jobs", (req, res) => res.json(listJobs(req.query.projectId as stri
 app.post("/api/jobs/:jobId/cancel", (req, res) => res.json(cancelJob(req.params.jobId) ?? null));
 
 // ---- Google Flow connection ----
-app.get("/api/flow/status", async (_req, res) => res.json(await flowStatus()));
-app.post("/api/flow/connect", async (_req, res) => res.json(await connectFlow()));
+// Remaining credits: read when Flow is free (after each Flow job, on connect, or when asked) and kept here.
+const credits: { value?: number; resets?: string; at?: string } = {};
+async function refreshCredits() {
+  const read = await readCredits().catch(() => undefined);
+  if (read?.credits !== undefined) Object.assign(credits, { value: read.credits, resets: read.resets, at: new Date().toISOString() });
+}
+setAfterFlowJob(refreshCredits);
+const withCredits = <T extends object>(s: T) => ({ ...s, credits: credits.value, creditsResets: credits.resets, creditsAt: credits.at });
+
+app.get("/api/flow/status", async (_req, res) => {
+  const status = await flowStatus();
+  // First time Flow is signed in, read the credits (once Flow is free).
+  if (status.signedIn && !credits.at) {
+    credits.at = new Date(0).toISOString();
+    void whenFlowIdle(refreshCredits);
+  }
+  res.json(withCredits(status));
+});
+app.post("/api/flow/connect", async (_req, res) => res.json(withCredits(await connectFlow())));
+app.post("/api/flow/credits", async (_req, res) => {
+  await whenFlowIdle(refreshCredits);
+  res.json(withCredits(await flowStatus()));
+});
 app.post("/api/flow/window", async (req, res) => {
   await setWindowVisible(Boolean(req.body?.visible));
   res.json(await flowStatus());

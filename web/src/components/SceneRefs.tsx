@@ -165,13 +165,16 @@ export function SceneRefs({ project, scene: s, busy, onChange, onExact, onPinRef
 
       {pinMode ? (
         <p className="muted small">
-          {chosen.length ? (
-            <>Starts from <b>{label(pins[0])}</b>, redrawn with <b>{chosen.map(label).join(", ")}</b> in it (labels and logos kept as photographed)</>
+          The clip starts exactly on <b>{label(pins[0])}</b>
+          {pins[1] ? (
+            <> and ends exactly on <b>{label(pins[1])}</b>{chosen.length ? " (ticked images aren't used while an end is pinned)" : ""}. </>
+          ) : chosen.length ? (
+            <> and moves to the same picture with <b>{chosen.map(label).join(", ")}</b> in it: that frame (shown on this card) is its end,
+              with labels and logos kept as photographed. </>
           ) : (
-            <>Starts exactly on <b>{label(pins[0])}</b>, used as it is</>
+            <>, used as it is. </>
           )}
-          {pins[1] ? <> and ends exactly on <b>{label(pins[1])}</b></> : null}. Tick up to {limit} images to add them to the start
-          {pins.length < 2 && "; pin a second image as the end to choose where the clip finishes"}.
+          Tick up to {limit} images (your product) to bring them in{pins.length < 2 && ", or pin a second image as the exact end"}.
         </p>
       ) : hasStart ? (
         <p className="muted small">

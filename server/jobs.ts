@@ -76,6 +76,19 @@ export function startJob(kind: JobKind, projectId: string, label: string, runner
  * Flow jobs share one Chrome tab, so they run one at a time, with a short human-paced
  * pause between them. onCancel lets the caller reset state for a job that never ran.
  */
+/** Something to do with the Flow tab between jobs (after each one, or now if Flow is idle). */
+let afterFlowJob: (() => Promise<void>) | undefined;
+export function setAfterFlowJob(fn: () => Promise<void>) {
+  afterFlowJob = fn;
+}
+
+/** Run fn on the Flow tab once no Flow job is using it. */
+export function whenFlowIdle<T>(fn: () => Promise<T>): Promise<T> {
+  const result = flowChain.then(fn);
+  flowChain = result.then(() => undefined, () => undefined);
+  return result;
+}
+
 export function queueFlowJob(
   kind: JobKind,
   projectId: string,
@@ -88,6 +101,7 @@ export function queueFlowJob(
   flowChain = flowChain.then(async () => {
     if (job.status === "cancelled") return onCancel?.();
     await run(job, runner);
+    await afterFlowJob?.().catch(() => {});
     await pause();
   });
   return job;

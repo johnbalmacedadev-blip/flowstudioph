@@ -86,6 +86,8 @@ export const api = {
   cancelJob: (jobId: string) => call<Job | null>("POST", `/api/jobs/${jobId}/cancel`),
 
   flowStatus: () => call<FlowStatus>("GET", "/api/flow/status"),
+  /** Read the remaining credits from Flow again (waits until Flow is free). */
+  refreshCredits: () => call<FlowStatus>("POST", "/api/flow/credits"),
   connectFlow: () => call<FlowStatus>("POST", "/api/flow/connect"),
   flowWindow: (visible: boolean) => call<FlowStatus>("POST", "/api/flow/window", { visible }),
 };
