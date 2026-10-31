@@ -72,6 +72,25 @@ export async function renderProductShot(p: Project, productId: string, report: R
 const CONTINUE_FRAME =
   "Continue the exact same scene as the first reference image: same location, set, props, lighting, time of day and wardrobe, as the next moment of the same shot.";
 
+/**
+ * The clip prompt with the scene's Dialogue as the spoken line. Storyboards write the line into the prompt too
+ * ("Maya says: '…'"), and that copy goes stale when you edit the Dialogue, so any quoted speech in the prompt
+ * is taken out and the current Dialogue put in, to be said word for word.
+ */
+export function clipPrompt(s: Scene): string {
+  const base = (s.videoPrompt || s.action).trim();
+  const line = s.dialogue.trim();
+  if (!line) return base;
+  // A sentence like "He says in Tagalog: '<line>'" (or "…"); the closing quote is followed by punctuation, a
+  // space or the end, so apostrophes inside the line ("'to", "Maya's") don't end it.
+  const speech =
+    /[^.!?]*\b(?:say|says|said|saying|ask|asks|asked|exclaim|exclaims|whisper|whispers|tell|tells|speak|speaks|reply|replies|shout|shouts|add|adds)\b[^.!?'"“‘]*?[:,]?\s*['"“‘][\s\S]+?['"”’](?=[\s.,!?]|$)[.!?]?/gi;
+  const cleaned = base.replace(speech, " ").replace(/\s{2,}/g, " ").trim();
+  // The Dialogue field may start with the speaker ("Host: …") and carry its own quotes.
+  const spoken = line.replace(/^[\p{L} .'-]{1,30}:\s*/u, "").replace(/^["“'‘]+|["”'’]+$/g, "").trim();
+  return `${cleaned} Spoken line, said word for word and nothing else: "${spoken}"`;
+}
+
 const PIN_FRAME =
   "Recreate the first reference image as closely as possible: same place, people, pose, framing, lighting and wardrobe. Bring in what the other reference images show exactly as they are, keeping any product's packaging, label text and logo unchanged.";
 
@@ -187,8 +206,8 @@ export async function renderSceneVideo(p: Project, sceneId: string, report: Repo
   const { file, src } = await generateMedia(p, report, `scene-${pad(s.number)}-clip`, {
     kind: "video",
     prompt: pins.length
-      ? `${end ? EXACT_START_END : EXACT_START} ${withLocks(p, s.videoPrompt || s.action, products)}`
-      : withLocks(p, s.videoPrompt || s.action, products),
+      ? `${end ? EXACT_START_END : EXACT_START} ${withLocks(p, clipPrompt(s), products)}`
+      : withLocks(p, clipPrompt(s), products),
     aspect: p.settings.aspectRatio,
     durationSec: s.durationSec,
     videoMode: start ? "frames" : "ingredients",
