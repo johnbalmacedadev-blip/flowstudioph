@@ -49,6 +49,8 @@ export function SceneRefs({ project, scene: s, busy, onChange, onExact, onPinRef
   // A seamless scene should start on the previous clip's last frame (offered even if it was removed).
   const clipEnd = [...options, ...hidden].find((o) => o.key === "prev-last");
   const seamGap = s.continuesPrevious && pinMode && pins[0] !== "prev-last" && Boolean(clipEnd);
+  const prevScene = project.scenes[project.scenes.findIndex((x) => x.id === s.id) - 1];
+  const atClipEnd = pins[0] === "prev-last";
   // The server puts a removed image back when it's pinned.
   const startFromClipEnd = () => onExact(["prev-last", ...pins.slice(1).filter((k) => k !== "prev-last")]);
   const pin = (key: string) => onExact(pinned(key) >= 0 ? pins.filter((k) => k !== key) : [...pins, key].slice(0, 2));
@@ -77,6 +79,21 @@ export function SceneRefs({ project, scene: s, busy, onChange, onExact, onPinRef
           </>
         )}
         <span className="grow" />
+        {prevScene && (
+          // Always here (every scene after the first): start exactly where the previous clip ends.
+          <button
+            className={`btn small ${atClipEnd ? "ghost" : seamGap ? "primary" : ""}`}
+            disabled={!clipEnd || atClipEnd}
+            onClick={startFromClipEnd}
+            title={
+              !clipEnd ? `Render scene ${prevScene.number}'s clip first; then this scene can start on its last frame.`
+              : atClipEnd ? `This scene already starts on the last frame of scene ${prevScene.number}'s clip.`
+              : `Pin the last frame of scene ${prevScene.number}'s clip as this scene's start. Tick other images (your product) to add them to it.`
+            }
+          >
+            {atClipEnd ? `✓ Starts at end of #${prevScene.number}` : `⤵ Start from end of #${prevScene.number}`}
+          </button>
+        )}
         {hidden.length > 0 && (
           <button className="link small" onClick={() => setShowHidden(!showHidden)}>
             {showHidden ? "Hide removed" : `Show removed (${hidden.length})`}
@@ -141,9 +158,8 @@ export function SceneRefs({ project, scene: s, busy, onChange, onExact, onPinRef
         <div className="seam-warn small">
           <span>
             ⚠ This scene is seamless, but its start is <b>{label(pins[0])}</b>, not where the previous clip ends, so the
-            cut will jump.
+            cut will jump. Use <b>Start from end of #{prevScene?.number}</b> above.
           </span>
-          <button className="btn small primary" onClick={startFromClipEnd}>Start from {clipEnd!.label}</button>
         </div>
       )}
 
