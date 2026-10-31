@@ -1,12 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Locator, Page } from "playwright-core";
-import { chosenRefKeys, MAX_REFS, sceneProducts } from "../../shared/attachments.js";
+import { chosenRefKeys, exactKeys, MAX_REFS, sceneProducts } from "../../shared/attachments.js";
 import type { Character, Product, Project, Scene } from "../../shared/types.js";
 import { exactFrame, lastFrame } from "../media.js";
 import { ensureDir, refsDir, rendersDir } from "../paths.js";
 import { readSettings } from "../settings.js";
 import { getProject, updateProject } from "../store.js";
+import { removeProductMentions } from "../storyboard.js";
 import { getBrowser, getFlowPage } from "./browser.js";
 
 type Report = (progress: string) => void;
@@ -29,6 +30,8 @@ interface Request {
   /** Video only: "frames" uses the first attachment as the start frame, "ingredients" uses them as references. */
   videoMode?: "frames" | "ingredients";
   attachments: Attachment[];
+  /** Frames mode only: the clip's end frame. */
+  endFrame?: Attachment;
 }
 
 // ---------------------------------------------------------------- public API
@@ -71,10 +74,11 @@ const CONTINUE_FRAME =
 
 export async function renderSceneImage(p: Project, sceneId: string, report: Report) {
   const s = scene(p, sceneId);
-  if (s.exactFrameKey) {
+  const pins = exactKeys(s);
+  if (pins.length) {
     // Pinned exact image: nothing is generated, the photo itself becomes the frame.
     report("Using your exact image as the frame…");
-    return path.basename(await makeExactFrame(p, s));
+    return path.basename(await makeExactFrame(p, s, pins[0], "start"));
   }
   const keys = chosenRefKeys(p, s, true);
   if (s.continuesPrevious && !keys.includes("prev-frame") && !s.refOverride) {
@@ -87,7 +91,7 @@ export async function renderSceneImage(p: Project, sceneId: string, report: Repo
     kind: "image",
     prompt: `${withLocks(p, base, products)} ${NO_TEXT}`,
     aspect: p.settings.aspectRatio,
-    attachments: sceneAttachments(p, s, keys),
+    attachments: await sceneAttachments(p, s, keys),
   });
 }
 
@@ -98,7 +102,9 @@ export async function renderSceneImage(p: Project, sceneId: string, report: Repo
 export async function renderSceneVideo(p: Project, sceneId: string, report: Report) {
   const s = scene(p, sceneId);
   let start: string | undefined;
-  if (s.continuesPrevious && !s.exactFrameKey) {
+  let end: string | undefined;
+  const pins = exactKeys(s);
+  if (s.continuesPrevious && !pins.length) {
     const prevClip = renderFile(p, previous(p, s)?.videoFile);
     if (prevClip) {
       report("Taking the last frame of the previous clip…");
@@ -107,24 +113,26 @@ export async function renderSceneVideo(p: Project, sceneId: string, report: Repo
       report("The previous scene has no clip yet, so this one can't pick up from it; using its own frame.");
     }
   }
-  // A pinned exact image wins over everything: the clip starts on the photo itself.
-  if (s.exactFrameKey) {
-    report("Starting the clip on your exact image…");
-    start = await makeExactFrame(p, s);
+  // Pinned exact images win over everything: the clip starts (and maybe ends) on the images themselves.
+  if (pins.length) {
+    report(pins.length > 1 ? "Setting your exact start and end images…" : "Starting the clip on your exact image…");
+    start = await makeExactFrame(p, s, pins[0], "start");
+    if (pins[1]) end = await makeExactFrame(p, s, pins[1], "end");
   }
   start ??= renderFile(p, s.imageFile);
   // From a start frame the product is already in the picture; without one, the scene's chosen images go in.
   const products = sceneProducts(p, s);
-  const refs = sceneAttachments(p, s, chosenRefKeys(p, s, false));
+  const refs = await sceneAttachments(p, s, chosenRefKeys(p, s, false));
   const { file, src } = await generateMedia(p, report, `scene-${pad(s.number)}-clip`, {
     kind: "video",
-    prompt: s.exactFrameKey
-      ? `${EXACT_START} ${withLocks(p, s.videoPrompt || s.action, products)}`
+    prompt: pins.length
+      ? `${end ? EXACT_START_END : EXACT_START} ${withLocks(p, s.videoPrompt || s.action, products)}`
       : withLocks(p, s.videoPrompt || s.action, products),
     aspect: p.settings.aspectRatio,
     durationSec: s.durationSec,
     videoMode: start ? "frames" : "ingredients",
     attachments: start ? [upload(start)] : refs,
+    endFrame: start && end ? upload(end) : undefined,
   });
   updateProject(p.id, (x) => {
     const sc = x.scenes.find((y) => y.id === s.id);
@@ -326,10 +334,10 @@ function scene(p: Project, id: string) {
 
 /** Products in a scene: the ones it lists, plus every locked product. */
 /** The files behind a scene's chosen image keys (see shared/attachments.ts); missing files are skipped. */
-function sceneAttachments(p: Project, s: Scene, keys: string[]): Attachment[] {
+async function sceneAttachments(p: Project, s: Scene, keys: string[]): Promise<Attachment[]> {
   const out: Attachment[] = [];
   for (const key of keys) {
-    const file = keyFile(p, s, key);
+    const file = await keyFile(p, s, key);
     if (!file) continue;
     // References keep their own upload name, so one already in Flow is reused.
     const ref = key.startsWith("ref:") ? p.references.find((x) => x.id === key.slice(4)) : undefined;
@@ -339,8 +347,12 @@ function sceneAttachments(p: Project, s: Scene, keys: string[]): Attachment[] {
 }
 
 /** The file on disk behind an image key, if it exists. */
-function keyFile(p: Project, s: Scene, key: string): string | undefined {
+async function keyFile(p: Project, s: Scene, key: string): Promise<string | undefined> {
   const [kind, id] = key.split(":");
+  if (kind === "prev-last") {
+    const clip = renderFile(p, previous(p, s)?.videoFile);
+    return clip ? lastFrame(clip) : undefined;
+  }
   if (kind === "ref") {
     const r = p.references.find((x) => x.id === id);
     const file = r && path.join(refsDir(p.id), r.file);
@@ -352,15 +364,19 @@ function keyFile(p: Project, s: Scene, key: string): string | undefined {
     : undefined;
 }
 
+const EXACT_START_END =
+  "The clip starts on the exact image in the start frame and ends on the exact image in the end frame; move naturally from one to the other. Keep both images, especially any product packaging, label text and logo, exactly as they are: do not redraw or redesign them.";
+
 const EXACT_START =
   "The clip starts on the exact photo in the start frame. Keep everything in it, especially the product's packaging, label text and logo, exactly as it is: do not redraw or redesign it. Animate gently.";
 
 /** The scene's pinned image as an exact frame at the video's size (see exactFrame in media.ts). */
-async function makeExactFrame(p: Project, s: Scene) {
-  const photo = keyFile(p, s, s.exactFrameKey!);
-  if (!photo) throw new Error("The image pinned as this scene's exact frame is missing. Pick another one.");
+async function makeExactFrame(p: Project, s: Scene, key: string, which: "start" | "end") {
+  const photo = await keyFile(p, s, key);
+  if (!photo) throw new Error(`The image pinned as this scene's exact ${which} is missing. Pick another one.`);
   const [w, h] = p.settings.aspectRatio === "9:16" ? [1080, 1920] : [1920, 1080];
-  const out = path.join(ensureDir(rendersDir(p.id)), `scene-${pad(s.number)}-frame-exact-${Date.now().toString(36)}.jpg`);
+  const name = which === "start" ? "frame-exact" : "end-exact";
+  const out = path.join(ensureDir(rendersDir(p.id)), `scene-${pad(s.number)}-${name}-${Date.now().toString(36)}.jpg`);
   return exactFrame(photo, out, w, h);
 }
 
@@ -389,7 +405,18 @@ const UGC_LOOK =
 const NO_TEXT = "A still frame: no subtitles, captions or on-screen text (only text printed on real objects, like the product label).";
 
 function withLocks(p: Project, prompt: string, products: Product[]) {
-  return [prompt, productLock(products), p.settings.videoStyle === "ugc" ? UGC_LOOK : ""].filter(Boolean).join(" ");
+  // Products this scene leaves out: drop the sentences that describe them (a storyboard written while they were
+  // locked still mentions them) and say plainly not to show them.
+  const leftOut = (p.products ?? []).filter((x) => !products.some((y) => y.id === x.id));
+  const names = leftOut.map((x) => x.name);
+  const keepOut = !leftOut.length
+    ? ""
+    : products.length
+      ? `Do not show ${names.join(" or ")}.`
+      : `Do not show ${names.join(", ")} or any other product, packaging, jar, box, sachet or brand label.`;
+  return [removeProductMentions(prompt, names), productLock(products), keepOut, p.settings.videoStyle === "ugc" ? UGC_LOOK : ""]
+    .filter(Boolean)
+    .join(" ");
 }
 
 /** A character's rendered portrait if there is one, else their reference images; at most 3 in total. */
@@ -433,6 +460,10 @@ async function generateMedia(p: Project, report: Report, baseName: string, req: 
     for (const [i, a] of req.attachments.entries()) {
       report(fromFrame ? "Setting the start frame…" : `Attaching reference ${i + 1} of ${req.attachments.length}…`);
       ids.push(await attach(page, a, fromFrame ? "start" : "reference"));
+    }
+    if (fromFrame && req.endFrame) {
+      report("Setting the end frame…");
+      ids.push(await attach(page, req.endFrame, "end"));
     }
     return ids;
   };
@@ -568,10 +599,11 @@ export async function resetComposer(page: Page) {
 }
 
 /** Open the asset picker: from the Start slot for a start frame, or from + for a reference. */
-async function openPicker(page: Page, slot: "start" | "reference") {
+async function openPicker(page: Page, slot: "start" | "end" | "reference") {
   const upload = page.getByRole("button", { name: "Upload media" });
   if (await upload.isVisible().catch(() => false)) await page.keyboard.press("Escape");
   if (slot === "start") await page.getByRole("button", { name: "Start", exact: true }).click({ timeout: 15_000 });
+  else if (slot === "end") await page.getByRole("button", { name: "End", exact: true }).click({ timeout: 15_000 });
   else await page.locator('[aria-label="Add ingredients to the prompt box"]').last().click({ timeout: 15_000 });
   await upload.waitFor({ timeout: 15_000 });
 }
@@ -580,7 +612,7 @@ async function openPicker(page: Page, slot: "start" | "reference") {
  * Find the asset by its unique name in the picker, uploading it the first time, and pick it.
  * Returns Flow's id for it, so checkAttachments() can confirm Flow is holding this exact image.
  */
-async function attach(page: Page, a: Attachment, slot: "start" | "reference") {
+async function attach(page: Page, a: Attachment, slot: "start" | "end" | "reference") {
   await openPicker(page, slot);
   const search = page.getByPlaceholder("Search assets");
   const option = () => page.getByRole("option").filter({ hasText: a.name }).first();

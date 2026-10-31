@@ -11,6 +11,7 @@ export const MAX_REFS = 3;
  *   portrait:<characterId>   a character's rendered portrait
  *   product-shot:<productId> a product's rendered product shot
  *   prev-frame               the previous scene's frame (keeps a seamless scene's set and light)
+ *   prev-last                the last frame of the previous scene's clip (pin it to start exactly there)
  */
 export interface RefOption {
   key: string;
@@ -22,13 +23,35 @@ export interface RefOption {
   ownerId?: string;
 }
 
-/** Every image this scene could send, in the order they're offered. */
+/** Every image this scene could send, in the order they're offered (minus any removed from this scene). */
 export function refOptions(p: Project, s: Scene): RefOption[] {
+  const hidden = new Set(s.hiddenRefKeys ?? []);
+  return allRefOptions(p, s).filter((o) => !hidden.has(o.key));
+}
+
+/** Images removed from this scene's list, so they can be put back. */
+export function hiddenRefOptions(p: Project, s: Scene): RefOption[] {
+  const hidden = new Set(s.hiddenRefKeys ?? []);
+  return allRefOptions(p, s).filter((o) => hidden.has(o.key));
+}
+
+/** A clip's last frame, kept next to it as <clip>-last.jpg (made when needed; see lastFrame in media.ts). */
+export const lastFrameFile = (clip: string) => clip.replace(/\.[^.]+$/, "-last.jpg");
+
+/** The images pinned to be used exactly: [start] or [start, end]. */
+export function exactKeys(s: Scene): string[] {
+  return (s.exactFrameKeys ?? (s.exactFrameKey ? [s.exactFrameKey] : [])).slice(0, 2);
+}
+
+function allRefOptions(p: Project, s: Scene): RefOption[] {
   const out: RefOption[] = [];
   const refsById = new Map(p.references.map((r) => [r.id, r]));
   const listed = new Set<string>();
 
   const prev = previousScene(p, s);
+  if (prev?.videoFile) {
+    out.push({ key: "prev-last", label: `Scene ${prev.number} clip end`, group: "Continuity", folder: "renders", file: lastFrameFile(prev.videoFile) });
+  }
   if (prev?.imageFile) {
     out.push({ key: "prev-frame", label: `Scene ${prev.number} frame`, group: "Continuity", folder: "renders", file: prev.imageFile });
   }
@@ -73,7 +96,8 @@ export function autoRefKeys(p: Project, s: Scene, forFrame: boolean): string[] {
     if (c.portraitFile) keys.push(`portrait:${c.id}`);
     else keys.push(...c.referenceIds.map((id) => `ref:${id}`));
   }
-  return [...new Set(keys)].slice(0, MAX_REFS);
+  const hidden = new Set(s.hiddenRefKeys ?? []);
+  return [...new Set(keys)].filter((k) => !hidden.has(k)).slice(0, MAX_REFS);
 }
 
 /** What this scene actually sends: your own picks if you've made some, otherwise the app's. */

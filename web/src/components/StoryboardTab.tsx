@@ -2,7 +2,7 @@ import { Fragment, useState } from "react";
 import { DURATIONS, type Duration, type FlowStatus, type Project, type Scene } from "../../../shared/types";
 import { api, fileUrl } from "../api";
 import { Editable } from "./Editable";
-import { sceneProducts } from "../../../shared/attachments";
+import { chosenRefKeys, exactKeys, MAX_REFS, sceneProducts } from "../../../shared/attachments";
 import { isBusy, RenderLabel } from "./Busy";
 import { SceneRefs } from "./SceneRefs";
 import { StatusBadge } from "./StatusBadge";
@@ -97,12 +97,16 @@ export function StoryboardTab({ project, flow, onChange, onError }: Props) {
             onToggle={() => toggle(s.id)}
             onPatch={(patch) => run(api.updateScene(id, s.id, patch))}
             onRefs={(keys) => run(api.setSceneRefs(id, s.id, keys))}
-            onExact={(key) =>
-              // Pinning applies the exact frame straight away (it's made on this computer, nothing generated).
-              api.setSceneExact(id, s.id, key)
-                .then((p) => { onChange(p); if (key) return api.render(id, "image", [s.id]); })
+            onExact={(keys) =>
+              // A new start image applies the exact frame straight away (made on this computer, nothing generated).
+              api.setSceneExact(id, s.id, keys)
+                .then((p) => {
+                  onChange(p);
+                  if (keys[0] && keys[0] !== exactKeys(s)[0]) return api.render(id, "image", [s.id]);
+                })
                 .catch((e) => onError(e.message))
             }
+            onHidden={(keys) => run(api.setSceneHidden(id, s.id, keys))}
             onMove={(d) => run(api.moveScene(id, s.id, d))}
             onAddAfter={() => run(api.addScene(id, s.id))}
             onDelete={() => confirm(`Delete scene ${s.number}?`) && run(api.deleteScene(id, s.id))}
@@ -115,7 +119,7 @@ export function StoryboardTab({ project, flow, onChange, onError }: Props) {
   );
 }
 
-function SceneCard({ project, scene: s, first, last, open, onToggle, onPatch, onRefs, onExact, onMove, onAddAfter, onDelete, onRender }: {
+function SceneCard({ project, scene: s, first, last, open, onToggle, onPatch, onRefs, onExact, onHidden, onMove, onAddAfter, onDelete, onRender }: {
   project: Project;
   scene: Scene;
   first: boolean;
@@ -124,7 +128,8 @@ function SceneCard({ project, scene: s, first, last, open, onToggle, onPatch, on
   onToggle: () => void;
   onPatch: (patch: Partial<Scene>) => void;
   onRefs: (keys: string[] | null) => void;
-  onExact: (key: string | null) => void;
+  onExact: (keys: string[]) => void;
+  onHidden: (keys: string[]) => void;
   onMove: (d: "up" | "down") => void;
   onAddAfter: () => void;
   onDelete: () => void;
@@ -174,7 +179,7 @@ function SceneCard({ project, scene: s, first, last, open, onToggle, onPatch, on
         <p className="action">{s.action}</p>
         {s.dialogue && <p className="dialogue">{s.dialogue}</p>}
 
-        <SceneRefs project={project} scene={s} onChange={onRefs} onExact={onExact} />
+        <SceneRefs project={project} scene={s} onChange={onRefs} onExact={onExact} onHidden={onHidden} />
 
         {open && (
           <div className="prompts">
@@ -197,11 +202,17 @@ function SceneCard({ project, scene: s, first, last, open, onToggle, onPatch, on
                 <span>Products in this shot</span>
                 <div className="chips">
                   {products.map((x) => {
-                    const on = x.locked || !!s.productIds?.includes(x.id);
+                    // Same switch as the product's thumbnails in "Images sent to Flow": on adds its photo, off
+                    // removes all its images, which takes the product out of this scene (even a locked one).
+                    const on = shown.some((y) => y.id === x.id);
+                    const own = new Set([...x.referenceIds.map((id) => `ref:${id}`), `product-shot:${x.id}`]);
+                    const chosen = chosenRefKeys(project, s, true);
+                    const first = x.referenceIds[0] ? `ref:${x.referenceIds[0]}` : x.shotFile ? `product-shot:${x.id}` : undefined;
+                    const full = chosen.length >= MAX_REFS;
                     return (
-                      <button key={x.id} className={`chip product-chip ${on ? "on" : ""}`} disabled={x.locked}
-                        title={x.locked ? "Locked to every scene (unlock it on the Cast & Products tab)" : ""}
-                        onClick={() => onPatch({ productIds: on ? (s.productIds ?? []).filter((y) => y !== x.id) : [...(s.productIds ?? []), x.id] })}>
+                      <button key={x.id} className={`chip product-chip ${on ? "on" : ""}`} disabled={!on && (!first || full)}
+                        title={on ? "In this shot: click to leave it out" : !first ? "Add a photo of this product first" : full ? "3 images already picked: untick one first" : "Click to put it in this shot"}
+                        onClick={() => onRefs(on ? chosen.filter((k) => !own.has(k)) : [...chosen, first!])}>
                         {x.locked ? "🔒" : "📦"} {x.name}
                       </button>
                     );

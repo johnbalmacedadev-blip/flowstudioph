@@ -39,10 +39,16 @@ Your script ──> Flow Studio PH ──> Chrome (signed in to Flow) ──> Fl
    subtitles burned in; clips speak the dialogue. A spinning gear on a render button means it's queued or
    rendering. **Images sent to Flow** on each scene shows the reference images it will attach (up to 3): the
    app's own pick (Auto), or tick exactly the ones you want (Custom; Reset to auto undoes it). Untick all of a
-   product's images and that scene leaves the product out, even a locked one.
-   **📌 Exact** on any of those images uses it as the scene's frame exactly as it is: nothing is generated for
+   product's images (or click its chip off) and that scene leaves the product out, even a locked one: at render
+   time the sentences describing it are taken out of the prompt (spoken lines stay) and Flow is told not to
+   show it.
+   **📌 Start** on any of those images uses it as the scene's frame exactly as it is: nothing is generated for
    the frame (it's fitted to the video's shape, any gap filled with a blurred copy of the same photo), and the
    clip starts on it with Flow told to keep it unchanged. Use it for packshots where the label must be exact.
+   Then **📌 End** on a second image makes the clip finish exactly on that one (Flow's End frame); while images
+   are pinned, nothing else is sent. **Scene N clip end** (the last frame of the previous clip) is offered too:
+   pin it as Start to begin exactly where the last scene stopped. **×** takes an image off that scene's list
+   (it stays in the project); **Show removed** lists them with **Put back**.
 5. **Seamless scenes.** The storyboard keeps the story in one location unless the script moves it, and marks each scene
    that continues from the one before. Between scenes the storyboard shows **🔗 Seamless** or **✂ Cut**; click it
    to switch. A seamless scene's frame is matched to the previous frame, and its clip **starts on the last frame

@@ -7,6 +7,7 @@ import {
   type Scene,
 } from "../shared/types.js";
 import { MAX_REFS } from "../shared/attachments.js";
+import { lastFrame } from "./media.js";
 import { deleteExport, exportFinalCut, resetFinalCut, saveFinalCut, syncFinalCut } from "./finalcut.js";
 import { breakdownWithFlowAgent } from "./flow/agent.js";
 import { connectFlow, flowStatus, setWindowVisible } from "./flow/browser.js";
@@ -146,7 +147,7 @@ app.post("/api/projects/:id/storyboard", (req, res) => {
 
 // ---- characters & scenes ----
 const SCENE_FIELDS: (keyof Scene)[] = [
-  "title", "durationSec", "location", "characterIds", "action", "shot", "imagePrompt", "videoPrompt", "dialogue", "sound", "continuesPrevious", "productIds", "refOverride", "exactFrameKey",
+  "title", "durationSec", "location", "characterIds", "action", "shot", "imagePrompt", "videoPrompt", "dialogue", "sound", "continuesPrevious", "productIds", "refOverride", "exactFrameKeys", "hiddenRefKeys",
 ];
 const CHAR_FIELDS: (keyof Character)[] = ["name", "role", "description", "visualPrompt", "referenceIds"];
 
@@ -166,14 +167,25 @@ app.put("/api/projects/:id/scenes/:sceneId", (req, res) => {
           ? [...new Set(patch.refOverride.filter((k): k is string => typeof k === "string"))].slice(0, MAX_REFS)
           : undefined;
       }
-      // exactFrameKey: an image key to use as the exact frame, or null to generate the frame again.
-      if ((patch.exactFrameKey as unknown) === null) {
-        delete patch.exactFrameKey;
-        delete s.exactFrameKey;
-      } else if (patch.exactFrameKey !== undefined && typeof patch.exactFrameKey !== "string") {
-        delete patch.exactFrameKey;
+      // exactFrameKeys: up to two image keys used exactly (start, end); [] or null to generate frames again.
+      // hiddenRefKeys: images taken off this scene's list. Both replace the older single exactFrameKey.
+      for (const field of ["exactFrameKeys", "hiddenRefKeys"] as const) {
+        const value = patch[field] as unknown;
+        if (value === undefined) continue;
+        const list = Array.isArray(value) ? [...new Set(value.filter((k): k is string => typeof k === "string"))] : [];
+        if (field === "exactFrameKeys") delete s.exactFrameKey;
+        if (list.length) patch[field] = field === "exactFrameKeys" ? list.slice(0, 2) : list;
+        else {
+          delete patch[field];
+          delete s[field];
+        }
       }
       Object.assign(s, patch);
+      // A removed image can't stay pinned.
+      if (s.hiddenRefKeys?.length && s.exactFrameKeys?.length) {
+        s.exactFrameKeys = s.exactFrameKeys.filter((k) => !s.hiddenRefKeys!.includes(k));
+        if (!s.exactFrameKeys.length) delete s.exactFrameKeys;
+      }
     }),
   );
 });
@@ -355,8 +367,12 @@ app.get("/files/:projectId/:folder/:file", (req, res) => {
   const { folder, file } = req.params;
   if (!["refs", "renders", "exports"].includes(folder) || !/^[\w.-]+$/.test(file)) return void res.sendStatus(404);
   const full = path.join(PROJECTS_DIR, safeId(req.params.projectId), folder, file);
-  if (req.query.download) res.download(full, file);
-  else res.sendFile(full);
+  const send = () => (req.query.download ? res.download(full, file) : res.sendFile(full));
+  // A clip's last frame (<clip>-last.jpg) is made the first time it's asked for.
+  const clip = full.replace(/-last\.jpg$/, ".mp4");
+  if (folder === "renders" && file.endsWith("-last.jpg") && !fs.existsSync(full) && fs.existsSync(clip)) {
+    lastFrame(clip).then(send, () => res.sendStatus(404));
+  } else send();
 });
 
 // ---- production: serve the built UI ----

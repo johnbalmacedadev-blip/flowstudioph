@@ -286,3 +286,29 @@ function mergeProducts(project: Project, b: Breakdown): Product[] {
 function nearestDuration(sec: number): Duration {
   return DURATIONS.reduce((best, d) => (Math.abs(d - sec) < Math.abs(best - sec) ? d : best), DURATIONS[0] as Duration);
 }
+
+/**
+ * Take the sentences that describe a product out of a prompt, for scenes the product isn't in. Spoken lines
+ * stay ("Maya says: 'Try Prime C!'" is speech, not something to draw): a sentence with says/said/asks… and an
+ * opening quote starts speech, and a sentence ending on a closing quote ends it.
+ */
+export function removeProductMentions(text: string, names: string[]): string {
+  const wanted = names.map((n) => n.trim()).filter(Boolean);
+  if (!wanted.length) return text;
+  const patterns = wanted.map((n) => new RegExp(`\\b${escapeRegExp(n)}\\b`, "i"));
+  const named = (s: string) => patterns.some((re) => re.test(s));
+  const sentences = text.match(/[^.!?]+(?:[.!?]+["'”’]*|$)\s*/g) ?? [text];
+  const kept: string[] = [];
+  let inSpeech = false;
+  for (const s of sentences) {
+    const opensSpeech = /\b(says|said|asks|adds|replies|continues|whispers|shouts)\b\s*:?\s*["'“‘]/i.test(s);
+    if (inSpeech || opensSpeech || !named(s)) kept.push(s);
+    if (opensSpeech) inSpeech = true;
+    if (inSpeech && /["'”’]$/.test(s.trim())) inSpeech = false;
+  }
+  return kept.join("").replace(/\s{2,}/g, " ").trim();
+}
+
+function escapeRegExp(s: string) {
+  return s.replace(/[.*+?^$()|[\]\\{}]/g, "\\$&");
+}

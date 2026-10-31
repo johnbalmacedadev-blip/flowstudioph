@@ -49,9 +49,12 @@ export const api = {
   /** Your own image picks for a scene, or null to let the app choose again. */
   setSceneRefs: (id: string, sceneId: string, keys: string[] | null) =>
     call<Project>("PUT", `${P(id)}/scenes/${sceneId}`, { refOverride: keys }),
-  /** Use an image as the scene's exact frame (no frame generated), or null to generate frames again. */
-  setSceneExact: (id: string, sceneId: string, key: string | null) =>
-    call<Project>("PUT", `${P(id)}/scenes/${sceneId}`, { exactFrameKey: key }),
+  /** Images used exactly: [start] or [start, end]; [] to generate frames again. */
+  setSceneExact: (id: string, sceneId: string, keys: string[]) =>
+    call<Project>("PUT", `${P(id)}/scenes/${sceneId}`, { exactFrameKeys: keys }),
+  /** Images taken off a scene's list (they stay in the project). */
+  setSceneHidden: (id: string, sceneId: string, keys: string[]) =>
+    call<Project>("PUT", `${P(id)}/scenes/${sceneId}`, { hiddenRefKeys: keys }),
   addScene: (id: string, afterId?: string) => call<Project>("POST", `${P(id)}/scenes`, { afterId }),
   moveScene: (id: string, sceneId: string, direction: "up" | "down") =>
     call<Project>("POST", `${P(id)}/scenes/${sceneId}/move`, { direction }),

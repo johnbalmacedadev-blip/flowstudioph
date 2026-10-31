@@ -79,10 +79,14 @@ export interface Scene {
    */
   refOverride?: string[];
   /**
-   * An image (key from shared/attachments.ts) used as this scene's exact frame: no frame is generated, and the
-   * clip starts on it. Missing means the frame is generated as usual.
+   * Images (keys from shared/attachments.ts) used exactly as they are: the first is the scene's frame and its
+   * clip's start frame, the second (optional) the clip's end frame. Nothing new is generated for the frame.
    */
+  exactFrameKeys?: string[];
+  /** Older single pin, read as exactFrameKeys = [exactFrameKey]. */
   exactFrameKey?: string;
+  /** Images taken off this scene's list (not offered, not sent). They stay in the project. */
+  hiddenRefKeys?: string[];
   imageStatus: RenderStatus;
   imageFile?: string;
   videoStatus: RenderStatus;
